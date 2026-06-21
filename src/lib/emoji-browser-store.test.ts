@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { NostrEvent } from '@hyprgate/types';
 import { KIND_EMOJI_SET, KIND_USER_EMOJI_LIST } from '@hyprgate/utils/emoji-sets';
-import { buildCollectionTags, itemsFromEvent, type EmojiBrowserItem } from './emoji-browser-store.js';
+import {
+  buildCollectionTags,
+  itemsFromEvent,
+  normalizeFollowPubkeys,
+  type EmojiBrowserItem,
+} from './emoji-browser-store.js';
 
 const PUBKEY = 'a'.repeat(64);
 
@@ -82,5 +87,10 @@ describe('emoji browser helpers', () => {
       ['a', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
       ['emoji', 'blobcat', 'https://emoji.example/blobcat.png', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
     ]);
+  });
+
+  it('normalizes missing follow lists before relay filtering', () => {
+    expect(normalizeFollowPubkeys(undefined)).toEqual([]);
+    expect(normalizeFollowPubkeys(['a', '', 'a', 42, 'b'])).toEqual(['a', 'b']);
   });
 });
