@@ -23,10 +23,7 @@
     "@napplet/conformance-cli": "^0.2.3",
     "@napplet/vite-plugin": "^0.9.0",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@unocss/reset": "^66.6.7",
-    "@unocss/vite": "^66.6.7",
     "typescript": "^5.9.3",
-    "unocss": "^66.6.7",
     "vite": "^8.0.1",
     "vitest": "^4.1.0"
   }
