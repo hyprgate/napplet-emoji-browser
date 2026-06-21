@@ -1,7 +1,28 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { resourceImage } from '@hyprgate/utils';
+  import {
+    loadResourceObjectUrl,
+    resourceImage,
+    type ResourceObjectUrlSubscription,
+  } from '@hyprgate/utils';
   import { createEmojiBrowserStore, type EmojiBrowserItem } from './lib/emoji-browser-store.js';
+  import {
+    countTimedOutEmojiItems,
+    countUnresolvedEmojiItems,
+    EMOJI_RESOLVE_TIMEOUT_MS,
+    resolvedEmojiItems,
+    retryTimedOutEmojiResolutions,
+    setEmojiResolution,
+    syncEmojiResolutions,
+    type EmojiResolutionMap,
+    type EmojiResolveStatus,
+  } from './lib/emoji-resolution.js';
+
+  interface EmojiResolveParams {
+    key: string;
+    source: string;
+    attempt: number;
+  }
 
   let version = $state(0);
   const store = createEmojiBrowserStore(() => {
@@ -23,6 +44,7 @@
 
   let query = $state('');
   let selectedKey = $state<string | null>(null);
+  let resolutionByKey = $state<EmojiResolutionMap>({});
 
   const filteredItems = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -33,9 +55,13 @@
       || item.authorPubkey.toLowerCase().includes(needle),
     );
   });
+  const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
+  const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
+  const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
+  const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
 
   const selected = $derived(
-    filteredItems.find((item) => item.key === selectedKey) ?? filteredItems[0] ?? null,
+    visibleItems.find((item) => item.key === selectedKey) ?? visibleItems[0] ?? null,
   );
 
   onMount(() => {
@@ -55,13 +81,99 @@
       // Store state carries the visible error.
     }
   }
+
+  function replaceResolutionMap(next: EmojiResolutionMap): void {
+    if (next !== resolutionByKey) resolutionByKey = next;
+  }
+
+  function setResolution(key: string, next: EmojiResolveStatus): void {
+    replaceResolutionMap(setEmojiResolution(resolutionByKey, key, next));
+  }
+
+  function retryTimedOut(): void {
+    replaceResolutionMap(retryTimedOutEmojiResolutions(resolutionByKey));
+  }
+
+  function resolveEmojiImage(node: HTMLImageElement, params: EmojiResolveParams) {
+    let current = params;
+    let subscription: ResourceObjectUrlSubscription | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    function clearTimer(): void {
+      if (timeout === null) return;
+      clearTimeout(timeout);
+      timeout = null;
+    }
+
+    function closeSubscription(): void {
+      subscription?.close();
+      subscription = null;
+    }
+
+    function start(next: EmojiResolveParams): void {
+      clearTimer();
+      closeSubscription();
+      node.removeAttribute('src');
+      timeout = setTimeout(() => {
+        timeout = null;
+        setResolution(next.key, 'timed-out');
+      }, EMOJI_RESOLVE_TIMEOUT_MS);
+      subscription = loadResourceObjectUrl(next.source, (resolvedUrl) => {
+        if (resolvedUrl) node.src = resolvedUrl;
+        else node.removeAttribute('src');
+      }, {
+        refresh: next.attempt > 0,
+        onError: () => setResolution(next.key, 'timed-out'),
+      });
+    }
+
+    function handleLoad(): void {
+      clearTimer();
+      setResolution(current.key, 'resolved');
+    }
+
+    function handleError(): void {
+      setResolution(current.key, 'timed-out');
+    }
+
+    node.addEventListener('load', handleLoad);
+    node.addEventListener('error', handleError);
+    start(current);
+
+    return {
+      update(next: EmojiResolveParams): void {
+        if (
+          next.key === current.key
+          && next.source === current.source
+          && next.attempt === current.attempt
+        ) return;
+        current = next;
+        start(current);
+      },
+      destroy(): void {
+        clearTimer();
+        closeSubscription();
+        node.removeEventListener('load', handleLoad);
+        node.removeEventListener('error', handleError);
+      },
+    };
+  }
+
+  $effect(() => {
+    replaceResolutionMap(syncEmojiResolutions(state.items, resolutionByKey));
+  });
 </script>
 
 <main>
   <header class="topbar">
     <div>
       <h1>Emoji Browser</h1>
-      <p>{state.items.length} emoji from {state.followsCount} follows</p>
+      <p>
+        {state.items.length - unresolvedCount} emoji from {state.followsCount} follows
+        {#if unresolvedCount > 0}
+          <span class="inline-muted">· {unresolvedCount} unresolved</span>
+        {/if}
+      </p>
     </div>
     <button type="button" class="ghost" disabled={state.loading} onclick={() => store.load()}>
       {state.loading ? 'Loading' : 'Refresh'}
@@ -70,16 +182,46 @@
 
   <section class="toolbar">
     <input bind:value={query} placeholder="Filter shortcode, set, or pubkey" aria-label="Filter emoji" />
+    {#if timedOutCount > 0}
+      <button type="button" class="ghost retry" onclick={retryTimedOut}>
+        Try again ({timedOutCount})
+      </button>
+    {/if}
     {#if state.status}<span class="status">{state.status}</span>{/if}
     {#if state.error}<span class="status error">{state.error}</span>{/if}
   </section>
 
+  <div class="resolver-bin" aria-hidden="true">
+    {#each state.items as item (item.key)}
+      {#if resolutionByKey[item.key]?.status !== 'resolved'}
+        <img
+          use:resolveEmojiImage={{
+            key: item.key,
+            source: item.imageUrl,
+            attempt: resolutionByKey[item.key]?.attempt ?? 0,
+          }}
+          data-emoji-resolver
+          data-shortcode={item.shortcode}
+          alt=""
+        />
+      {/if}
+    {/each}
+  </div>
+
   <section class="layout">
     <div class="grid" aria-label="Discovered custom emoji">
-      {#if filteredItems.length === 0}
-        <p class="empty">{state.loading ? 'Loading custom emoji...' : 'No custom emoji found.'}</p>
+      {#if visibleItems.length === 0}
+        <p class="empty">
+          {#if state.loading}
+            Loading custom emoji...
+          {:else if filteredItems.length === 0}
+            No custom emoji found.
+          {:else}
+            Resolving custom emoji images. {filteredUnresolvedCount} unresolved.
+          {/if}
+        </p>
       {:else}
-        {#each filteredItems as item (item.key)}
+        {#each visibleItems as item (item.key)}
           <button
             type="button"
             class="emoji-card"
@@ -175,6 +317,7 @@
 
   p,
   .status,
+  .inline-muted,
   dt {
     color: var(--hg-text-muted, #b8b1a4);
     font-size: 11px;
@@ -196,6 +339,21 @@
   input:focus {
     outline: none;
     border-color: var(--hg-accent-cyan, #82d8f7);
+  }
+
+  .resolver-bin {
+    position: fixed;
+    left: -10000px;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .resolver-bin img {
+    width: 1px;
+    height: 1px;
   }
 
   .layout {
@@ -308,6 +466,10 @@
     min-height: 30px;
     padding: 0 10px;
     cursor: pointer;
+  }
+
+  .retry {
+    white-space: nowrap;
   }
 
   .add {
