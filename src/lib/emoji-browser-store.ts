@@ -84,6 +84,11 @@ function sourceTitle(event: NostrEvent): string {
   return event.tags.find((tag) => tag[0] === 'title')?.[1] ?? (event.kind === KIND_EMOJI_SET ? 'Emoji set' : 'Emoji list');
 }
 
+export function normalizeFollowPubkeys(value: unknown): string[] {
+  const follows = Array.isArray(value) ? value : [];
+  return [...new Set(follows.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0))];
+}
+
 export function itemsFromEvent(event: NostrEvent, collectionTags: readonly (readonly string[])[] = []): EmojiBrowserItem[] {
   const fallbackAddress = event.kind === KIND_EMOJI_SET ? setAddress(event) : null;
   const collection = parseCustomEmojiTags(collectionTags);
@@ -168,12 +173,13 @@ async function load(ctx: EmojiBrowserContext): Promise<void> {
   ctx.notify();
 
   try {
-    const [pubkey, follows] = await Promise.all([
+    const [pubkey, rawFollows] = await Promise.all([
       identity.getPublicKey(),
       identity.getFollows().catch(() => []),
     ]);
+    const follows = normalizeFollowPubkeys(rawFollows);
     ctx.state.currentPubkey = pubkey;
-    const authors = [...new Set(follows.filter((value): value is string => typeof value === 'string' && value.length > 0))];
+    const authors = follows;
     ctx.state.followsCount = authors.length;
     ctx.collectionEvent = await loadCollectionEvent(pubkey);
 
