@@ -89,6 +89,13 @@ export function normalizeFollowPubkeys(value: unknown): string[] {
   return [...new Set(follows.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0))];
 }
 
+export function latestUserEmojiListEvent(value: unknown, pubkey: string): NostrEvent | null {
+  const events = Array.isArray(value) ? value as NostrEvent[] : [];
+  return events
+    .filter((event) => event.kind === KIND_USER_EMOJI_LIST && event.pubkey === pubkey)
+    .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+}
+
 export function itemsFromEvent(event: NostrEvent, collectionTags: readonly (readonly string[])[] = []): EmojiBrowserItem[] {
   const fallbackAddress = event.kind === KIND_EMOJI_SET ? setAddress(event) : null;
   const collection = parseCustomEmojiTags(collectionTags);
@@ -156,9 +163,7 @@ function subscribe(ctx: EmojiBrowserContext, filter: NostrFilter, useOutbox: boo
 
 async function loadCollectionEvent(pubkey: string): Promise<NostrEvent | null> {
   const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: 1 }]);
-  return (events as NostrEvent[])
-    .filter((event) => event.kind === KIND_USER_EMOJI_LIST && event.pubkey === pubkey)
-    .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+  return latestUserEmojiListEvent(events, pubkey);
 }
 
 async function load(ctx: EmojiBrowserContext): Promise<void> {

@@ -4,6 +4,7 @@ import { KIND_EMOJI_SET, KIND_USER_EMOJI_LIST } from '@hyprgate/utils/emoji-sets
 import {
   buildCollectionTags,
   itemsFromEvent,
+  latestUserEmojiListEvent,
   normalizeFollowPubkeys,
   type EmojiBrowserItem,
 } from './emoji-browser-store.js';
@@ -92,5 +93,15 @@ describe('emoji browser helpers', () => {
   it('normalizes missing follow lists before relay filtering', () => {
     expect(normalizeFollowPubkeys(undefined)).toEqual([]);
     expect(normalizeFollowPubkeys(['a', '', 'a', 42, 'b'])).toEqual(['a', 'b']);
+  });
+
+  it('normalizes missing collection query results before event filtering', () => {
+    expect(latestUserEmojiListEvent(undefined, PUBKEY)).toBeNull();
+    expect(latestUserEmojiListEvent([
+      event({ kind: KIND_USER_EMOJI_LIST, created_at: 100 }),
+      event({ kind: KIND_EMOJI_SET, created_at: 300 }),
+      event({ kind: KIND_USER_EMOJI_LIST, created_at: 200 }),
+      event({ kind: KIND_USER_EMOJI_LIST, pubkey: 'b'.repeat(64), created_at: 400 }),
+    ], PUBKEY)?.created_at).toBe(200);
   });
 });
