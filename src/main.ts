@@ -1,5 +1,4 @@
 import '@napplet/shim';
-import '@unocss/reset/tailwind.css';
 
 import { installBuiltInThemeClient } from '@hyprgate/utils';
 import { mount } from 'svelte';
