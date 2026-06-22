@@ -181,4 +181,50 @@ describe('emoji browser helpers', () => {
       ],
     }));
   });
+
+  it('batches incoming emoji event rebuilds instead of rebuilding on every relay event', async () => {
+    vi.useFakeTimers();
+    try {
+      let onEvent: ((event: NostrEvent) => void) | null = null;
+      vi.mocked(relay.subscribe).mockImplementation((_filter, eventCallback) => {
+        onEvent = eventCallback as (event: NostrEvent) => void;
+        return { close: vi.fn() };
+      });
+
+      const onUpdate = vi.fn();
+      const store = createEmojiBrowserStore(onUpdate);
+      store.load();
+      await vi.waitFor(() => expect(relay.subscribe).toHaveBeenCalled());
+      onUpdate.mockClear();
+
+      onEvent!(event({
+        id: 'set-1',
+        pubkey: FOLLOW,
+        created_at: 301,
+        tags: [['d', 'set-1'], ['emoji', 'one', 'https://emoji.example/one.png']],
+      }));
+      onEvent!(event({
+        id: 'set-2',
+        pubkey: FOLLOW,
+        created_at: 302,
+        tags: [['d', 'set-2'], ['emoji', 'two', 'https://emoji.example/two.png']],
+      }));
+      onEvent!(event({
+        id: 'set-3',
+        pubkey: FOLLOW,
+        created_at: 303,
+        tags: [['d', 'set-3'], ['emoji', 'three', 'https://emoji.example/three.png']],
+      }));
+
+      expect(store.state.items).toEqual([]);
+      expect(onUpdate).not.toHaveBeenCalled();
+
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(store.state.items.map((item) => item.shortcode)).toEqual(['three', 'two', 'one']);
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

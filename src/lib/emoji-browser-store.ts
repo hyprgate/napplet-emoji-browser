@@ -50,6 +50,8 @@ interface EmojiBrowserContext {
   collectionEvent: NostrEvent | null;
   subs: Subscription[];
   pendingEose: number;
+  rebuildTimer: ReturnType<typeof setTimeout> | null;
+  itemsDirty: boolean;
   notify(): void;
 }
 
@@ -70,6 +72,11 @@ export function createInitialEmojiBrowserState(): EmojiBrowserState {
 
 function destroy(ctx: EmojiBrowserContext): void {
   for (const sub of ctx.subs.splice(0)) sub.close();
+  if (ctx.rebuildTimer !== null) {
+    clearTimeout(ctx.rebuildTimer);
+    ctx.rebuildTimer = null;
+  }
+  ctx.itemsDirty = false;
   ctx.pendingEose = 0;
 }
 
@@ -122,23 +129,49 @@ export function itemsFromEvent(event: NostrEvent, collectionTags: readonly (read
 
 function rebuild(ctx: EmojiBrowserContext): void {
   const collectionTags = ctx.collectionEvent?.tags ?? [];
+  const collection = parseCustomEmojiTags(collectionTags);
   ctx.state.items = [...ctx.itemsByKey.values()]
     .map((item) => ({
       ...item,
-      added: parseCustomEmojiTags(collectionTags).some(
+      added: collection.some(
         (existing) => existing.shortcode === item.shortcode && existing.imageUrl === item.imageUrl,
       ),
     }))
     .sort((a, b) => b.createdAt - a.createdAt || a.shortcode.localeCompare(b.shortcode));
+  ctx.itemsDirty = false;
+}
+
+function flushRebuild(ctx: EmojiBrowserContext): boolean {
+  if (ctx.rebuildTimer !== null) {
+    clearTimeout(ctx.rebuildTimer);
+    ctx.rebuildTimer = null;
+  }
+  if (!ctx.itemsDirty) return false;
+  rebuild(ctx);
+  return true;
+}
+
+function scheduleRebuild(ctx: EmojiBrowserContext): void {
+  if (ctx.rebuildTimer !== null) return;
+  ctx.rebuildTimer = setTimeout(() => {
+    ctx.rebuildTimer = null;
+    if (flushRebuild(ctx)) ctx.notify();
+  }, 0);
 }
 
 function rememberEvent(ctx: EmojiBrowserContext, event: NostrEvent): void {
+  let changed = false;
   for (const item of itemsFromEvent(event, ctx.collectionEvent?.tags ?? [])) {
     const existing = ctx.itemsByKey.get(item.key);
-    if (!existing || item.createdAt >= existing.createdAt) ctx.itemsByKey.set(item.key, item);
+    if (!existing || item.createdAt >= existing.createdAt) {
+      ctx.itemsByKey.set(item.key, item);
+      changed = true;
+    }
   }
-  rebuild(ctx);
-  ctx.notify();
+  if (changed) {
+    ctx.itemsDirty = true;
+    scheduleRebuild(ctx);
+  }
 }
 
 function handleEose(ctx: EmojiBrowserContext): void {
@@ -147,7 +180,7 @@ function handleEose(ctx: EmojiBrowserContext): void {
     ctx.state.loading = false;
     ctx.state.loaded = true;
   }
-  rebuild(ctx);
+  flushRebuild(ctx);
   ctx.notify();
 }
 
@@ -172,6 +205,7 @@ async function load(ctx: EmojiBrowserContext): Promise<void> {
   destroy(ctx);
   ctx.itemsByKey.clear();
   ctx.collectionEvent = null;
+  ctx.itemsDirty = false;
   ctx.state.loading = true;
   ctx.state.loaded = false;
   ctx.state.error = null;
@@ -193,7 +227,6 @@ async function load(ctx: EmojiBrowserContext): Promise<void> {
     if (authors.length === 0) {
       ctx.state.loading = false;
       ctx.state.loaded = true;
-      rebuild(ctx);
       ctx.notify();
       return;
     }
@@ -241,10 +274,11 @@ async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem)
     const latest = await loadCollectionEvent(pubkey);
     if (latest && (!ctx.collectionEvent || latest.created_at >= ctx.collectionEvent.created_at)) {
       ctx.collectionEvent = latest;
+      ctx.itemsDirty = true;
     }
     if (collectionHasItem(ctx.collectionEvent, item)) {
       ctx.state.status = `:${item.shortcode}: is already in your collection.`;
-      rebuild(ctx);
+      flushRebuild(ctx);
       return;
     }
     const tags = buildCollectionTags(ctx.collectionEvent, item);
@@ -264,7 +298,8 @@ async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem)
       sig: '',
     };
     ctx.state.status = `Added :${item.shortcode}:`;
-    rebuild(ctx);
+    ctx.itemsDirty = true;
+    flushRebuild(ctx);
   } catch (error) {
     ctx.state.error = error instanceof Error ? error.message : 'Unable to add emoji.';
     throw error;
@@ -281,6 +316,8 @@ export function createEmojiBrowserStore(onUpdate?: () => void): EmojiBrowserStor
     collectionEvent: null,
     subs: [],
     pendingEose: 0,
+    rebuildTimer: null,
+    itemsDirty: false,
     notify: () => onUpdate?.(),
   };
 

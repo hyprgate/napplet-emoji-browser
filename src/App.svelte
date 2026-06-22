@@ -12,6 +12,7 @@
     EMOJI_RESOLVE_TIMEOUT_MS,
     resolvedEmojiItems,
     retryTimedOutEmojiResolutions,
+    selectActiveEmojiResolutionItems,
     setEmojiResolution,
     syncEmojiResolutions,
     type EmojiResolutionMap,
@@ -56,6 +57,7 @@
     );
   });
   const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
+  const resolverItems = $derived(selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey));
   const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
   const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
   const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
@@ -194,19 +196,17 @@
   </section>
 
   <div class="resolver-bin" aria-hidden="true">
-    {#each state.items as item (item.key)}
-      {#if resolutionByKey[item.key]?.status !== 'resolved'}
-        <img
-          use:resolveEmojiImage={{
-            key: item.key,
-            source: item.imageUrl,
-            attempt: resolutionByKey[item.key]?.attempt ?? 0,
-          }}
-          data-emoji-resolver
-          data-shortcode={item.shortcode}
-          alt=""
-        />
-      {/if}
+    {#each resolverItems as item (item.key)}
+      <img
+        use:resolveEmojiImage={{
+          key: item.key,
+          source: item.imageUrl,
+          attempt: resolutionByKey[item.key]?.attempt ?? 0,
+        }}
+        data-emoji-resolver
+        data-shortcode={item.shortcode}
+        alt=""
+      />
     {/each}
   </div>
 
