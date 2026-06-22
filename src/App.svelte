@@ -168,9 +168,12 @@
   <header class="topbar">
     <div>
       <p>
-        {state.items.length - unresolvedCount} emoji from {state.followsCount} follows
+        {state.items.length} loaded emoji from {state.followsCount} follows
         {#if unresolvedCount > 0}
           <span class="inline-muted">· {unresolvedCount} unresolved</span>
+        {/if}
+        {#if timedOutCount > 0}
+          <span class="inline-muted">· {timedOutCount} timed out</span>
         {/if}
       </p>
     </div>
