@@ -53,6 +53,8 @@ interface EmojiBrowserContext {
   notify(): void;
 }
 
+const USER_EMOJI_LIST_QUERY_LIMIT = 20;
+
 export function createInitialEmojiBrowserState(): EmojiBrowserState {
   return {
     items: [],
@@ -162,7 +164,7 @@ function subscribe(ctx: EmojiBrowserContext, filter: NostrFilter, useOutbox: boo
 }
 
 async function loadCollectionEvent(pubkey: string): Promise<NostrEvent | null> {
-  const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: 1 }]);
+  const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: USER_EMOJI_LIST_QUERY_LIMIT }]);
   return latestUserEmojiListEvent(events, pubkey);
 }
 
@@ -217,8 +219,15 @@ export function buildCollectionTags(existing: NostrEvent | null, item: EmojiBrow
   return alreadyPresent ? tags : [...tags, [...item.tag]];
 }
 
+function collectionHasItem(existing: NostrEvent | null, item: EmojiBrowserItem): boolean {
+  return (existing?.tags ?? []).some(
+    (tag) => tag[0] === 'emoji' && tag[1] === item.shortcode && tag[2] === item.imageUrl,
+  );
+}
+
 async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem): Promise<void> {
-  if (!ctx.state.currentPubkey) throw new Error('Connect an identity before adding emoji.');
+  const pubkey = ctx.state.currentPubkey;
+  if (!pubkey) throw new Error('Connect an identity before adding emoji.');
   if (item.added) {
     ctx.state.status = `:${item.shortcode}: is already in your collection.`;
     ctx.notify();
@@ -229,18 +238,28 @@ async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem)
   ctx.state.status = null;
   ctx.notify();
   try {
+    const latest = await loadCollectionEvent(pubkey);
+    if (latest && (!ctx.collectionEvent || latest.created_at >= ctx.collectionEvent.created_at)) {
+      ctx.collectionEvent = latest;
+    }
+    if (collectionHasItem(ctx.collectionEvent, item)) {
+      ctx.state.status = `:${item.shortcode}: is already in your collection.`;
+      rebuild(ctx);
+      return;
+    }
+    const tags = buildCollectionTags(ctx.collectionEvent, item);
     const published = await relay.publish({
       kind: KIND_USER_EMOJI_LIST,
       content: '',
-      tags: buildCollectionTags(ctx.collectionEvent, item),
+      tags,
       created_at: Math.floor(Date.now() / 1000),
     }) as NostrEvent;
     ctx.collectionEvent = published ?? {
       id: `local-${Date.now()}`,
-      pubkey: ctx.state.currentPubkey,
+      pubkey,
       kind: KIND_USER_EMOJI_LIST,
       created_at: Math.floor(Date.now() / 1000),
-      tags: buildCollectionTags(ctx.collectionEvent, item),
+      tags,
       content: '',
       sig: '',
     };

@@ -1,15 +1,33 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NostrEvent } from '@hyprgate/types';
 import { KIND_EMOJI_SET, KIND_USER_EMOJI_LIST } from '@hyprgate/utils/emoji-sets';
 import {
   buildCollectionTags,
+  createEmojiBrowserStore,
   itemsFromEvent,
   latestUserEmojiListEvent,
   normalizeFollowPubkeys,
   type EmojiBrowserItem,
 } from './emoji-browser-store.js';
+import { identity, relay } from '@napplet/sdk';
+
+vi.mock('@napplet/sdk', () => ({
+  identity: {
+    getPublicKey: vi.fn(),
+    getFollows: vi.fn(),
+  },
+  outbox: {
+    subscribe: vi.fn(),
+  },
+  relay: {
+    query: vi.fn(),
+    subscribe: vi.fn(),
+    publish: vi.fn(),
+  },
+}));
 
 const PUBKEY = 'a'.repeat(64);
+const FOLLOW = 'b'.repeat(64);
 
 function event(overrides: Partial<NostrEvent>): NostrEvent {
   return {
@@ -25,6 +43,15 @@ function event(overrides: Partial<NostrEvent>): NostrEvent {
 }
 
 describe('emoji browser helpers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(identity.getPublicKey).mockResolvedValue(PUBKEY);
+    vi.mocked(identity.getFollows).mockResolvedValue([FOLLOW]);
+    vi.mocked(relay.query).mockResolvedValue([]);
+    vi.mocked(relay.subscribe).mockReturnValue({ close: vi.fn() });
+    vi.mocked(relay.publish).mockResolvedValue(event({ kind: KIND_USER_EMOJI_LIST, pubkey: PUBKEY }));
+  });
+
   it('extracts custom emoji from NIP-30 tags on kind 30030 sets', () => {
     expect(itemsFromEvent(event({
       tags: [
@@ -103,5 +130,55 @@ describe('emoji browser helpers', () => {
       event({ kind: KIND_USER_EMOJI_LIST, created_at: 200 }),
       event({ kind: KIND_USER_EMOJI_LIST, pubkey: 'b'.repeat(64), created_at: 400 }),
     ], PUBKEY)?.created_at).toBe(200);
+  });
+
+  it('refreshes the latest preferred list before publishing a custom emoji', async () => {
+    const baseline = event({
+      id: 'baseline',
+      kind: KIND_USER_EMOJI_LIST,
+      pubkey: PUBKEY,
+      created_at: 200,
+      tags: [
+        ['emoji', '😀'],
+        ['a', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
+        ['emoji', 'oldcat', 'https://emoji.example/oldcat.png', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
+      ],
+    });
+    vi.mocked(relay.query)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([baseline]);
+
+    let onEvent: ((event: NostrEvent) => void) | null = null;
+    let onEose: (() => void) | null = null;
+    vi.mocked(relay.subscribe).mockImplementation((_filter, eventCallback, eoseCallback) => {
+      onEvent = eventCallback as (event: NostrEvent) => void;
+      onEose = eoseCallback as () => void;
+      return { close: vi.fn() };
+    });
+
+    const store = createEmojiBrowserStore();
+    store.load();
+    await vi.waitFor(() => expect(relay.subscribe).toHaveBeenCalled());
+
+    onEvent!(event({
+      kind: KIND_EMOJI_SET,
+      pubkey: FOLLOW,
+      created_at: 300,
+      tags: [['d', 'dogs'], ['emoji', 'doge', 'https://emoji.example/doge.png']],
+    }));
+    onEose!();
+
+    const item = store.state.items.find((candidate) => candidate.shortcode === 'doge')!;
+    await store.addToCollection(item);
+
+    expect(relay.publish).toHaveBeenCalledWith(expect.objectContaining({
+      kind: KIND_USER_EMOJI_LIST,
+      tags: [
+        ['emoji', '😀'],
+        ['a', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
+        ['emoji', 'oldcat', 'https://emoji.example/oldcat.png', `${KIND_EMOJI_SET}:${PUBKEY}:cats`],
+        ['emoji', 'doge', 'https://emoji.example/doge.png', `${KIND_EMOJI_SET}:${FOLLOW}:dogs`],
+      ],
+    }));
   });
 });
