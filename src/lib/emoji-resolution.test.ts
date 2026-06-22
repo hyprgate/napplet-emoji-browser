@@ -38,7 +38,7 @@ describe('emoji resolution helpers', () => {
     });
   });
 
-  it('keeps loaded emoji visible even when image resolution is still pending or timed out', () => {
+  it('only returns emoji whose images have resolved while still counting unresolved loaded events', () => {
     const items = [item('ready'), item('pending'), item('timeout')];
     const resolutions: EmojiResolutionMap = {
       ready: { status: 'resolved', attempt: 0 },
@@ -46,7 +46,7 @@ describe('emoji resolution helpers', () => {
       timeout: { status: 'timed-out', attempt: 0 },
     };
 
-    expect(resolvedEmojiItems(items, resolutions).map((emoji) => emoji.key)).toEqual(['ready', 'pending', 'timeout']);
+    expect(resolvedEmojiItems(items, resolutions).map((emoji) => emoji.key)).toEqual(['ready']);
     expect(countUnresolvedEmojiItems(items, resolutions)).toBe(2);
     expect(countTimedOutEmojiItems(items, resolutions)).toBe(1);
   });
@@ -55,7 +55,7 @@ describe('emoji resolution helpers', () => {
     const items = [item('missing')];
 
     expect(countUnresolvedEmojiItems(items, {})).toBe(1);
-    expect(resolvedEmojiItems(items, {}).map((emoji) => emoji.key)).toEqual(['missing']);
+    expect(resolvedEmojiItems(items, {}).map((emoji) => emoji.key)).toEqual([]);
   });
 
   it('creates missing resolution entries when the image action reports a result first', () => {

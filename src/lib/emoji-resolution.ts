@@ -59,8 +59,7 @@ export function resolvedEmojiItems<T extends Pick<EmojiBrowserItem, 'key'>>(
   items: readonly T[],
   resolutions: EmojiResolutionMap,
 ): T[] {
-  void resolutions;
-  return [...items];
+  return items.filter((item) => resolutions[item.key]?.status === 'resolved');
 }
 
 export function countUnresolvedEmojiItems(
