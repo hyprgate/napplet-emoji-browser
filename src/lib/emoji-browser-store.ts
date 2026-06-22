@@ -50,8 +50,12 @@ interface EmojiBrowserContext {
   collectionEvent: NostrEvent | null;
   subs: Subscription[];
   pendingEose: number;
+  rebuildTimer: ReturnType<typeof setTimeout> | null;
+  itemsDirty: boolean;
   notify(): void;
 }
+
+const USER_EMOJI_LIST_QUERY_LIMIT = 20;
 
 export function createInitialEmojiBrowserState(): EmojiBrowserState {
   return {
@@ -68,6 +72,11 @@ export function createInitialEmojiBrowserState(): EmojiBrowserState {
 
 function destroy(ctx: EmojiBrowserContext): void {
   for (const sub of ctx.subs.splice(0)) sub.close();
+  if (ctx.rebuildTimer !== null) {
+    clearTimeout(ctx.rebuildTimer);
+    ctx.rebuildTimer = null;
+  }
+  ctx.itemsDirty = false;
   ctx.pendingEose = 0;
 }
 
@@ -120,23 +129,49 @@ export function itemsFromEvent(event: NostrEvent, collectionTags: readonly (read
 
 function rebuild(ctx: EmojiBrowserContext): void {
   const collectionTags = ctx.collectionEvent?.tags ?? [];
+  const collection = parseCustomEmojiTags(collectionTags);
   ctx.state.items = [...ctx.itemsByKey.values()]
     .map((item) => ({
       ...item,
-      added: parseCustomEmojiTags(collectionTags).some(
+      added: collection.some(
         (existing) => existing.shortcode === item.shortcode && existing.imageUrl === item.imageUrl,
       ),
     }))
     .sort((a, b) => b.createdAt - a.createdAt || a.shortcode.localeCompare(b.shortcode));
+  ctx.itemsDirty = false;
+}
+
+function flushRebuild(ctx: EmojiBrowserContext): boolean {
+  if (ctx.rebuildTimer !== null) {
+    clearTimeout(ctx.rebuildTimer);
+    ctx.rebuildTimer = null;
+  }
+  if (!ctx.itemsDirty) return false;
+  rebuild(ctx);
+  return true;
+}
+
+function scheduleRebuild(ctx: EmojiBrowserContext): void {
+  if (ctx.rebuildTimer !== null) return;
+  ctx.rebuildTimer = setTimeout(() => {
+    ctx.rebuildTimer = null;
+    if (flushRebuild(ctx)) ctx.notify();
+  }, 0);
 }
 
 function rememberEvent(ctx: EmojiBrowserContext, event: NostrEvent): void {
+  let changed = false;
   for (const item of itemsFromEvent(event, ctx.collectionEvent?.tags ?? [])) {
     const existing = ctx.itemsByKey.get(item.key);
-    if (!existing || item.createdAt >= existing.createdAt) ctx.itemsByKey.set(item.key, item);
+    if (!existing || item.createdAt >= existing.createdAt) {
+      ctx.itemsByKey.set(item.key, item);
+      changed = true;
+    }
   }
-  rebuild(ctx);
-  ctx.notify();
+  if (changed) {
+    ctx.itemsDirty = true;
+    scheduleRebuild(ctx);
+  }
 }
 
 function handleEose(ctx: EmojiBrowserContext): void {
@@ -145,7 +180,7 @@ function handleEose(ctx: EmojiBrowserContext): void {
     ctx.state.loading = false;
     ctx.state.loaded = true;
   }
-  rebuild(ctx);
+  flushRebuild(ctx);
   ctx.notify();
 }
 
@@ -162,7 +197,7 @@ function subscribe(ctx: EmojiBrowserContext, filter: NostrFilter, useOutbox: boo
 }
 
 async function loadCollectionEvent(pubkey: string): Promise<NostrEvent | null> {
-  const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: 1 }]);
+  const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: USER_EMOJI_LIST_QUERY_LIMIT }]);
   return latestUserEmojiListEvent(events, pubkey);
 }
 
@@ -170,6 +205,7 @@ async function load(ctx: EmojiBrowserContext): Promise<void> {
   destroy(ctx);
   ctx.itemsByKey.clear();
   ctx.collectionEvent = null;
+  ctx.itemsDirty = false;
   ctx.state.loading = true;
   ctx.state.loaded = false;
   ctx.state.error = null;
@@ -191,7 +227,6 @@ async function load(ctx: EmojiBrowserContext): Promise<void> {
     if (authors.length === 0) {
       ctx.state.loading = false;
       ctx.state.loaded = true;
-      rebuild(ctx);
       ctx.notify();
       return;
     }
@@ -217,8 +252,15 @@ export function buildCollectionTags(existing: NostrEvent | null, item: EmojiBrow
   return alreadyPresent ? tags : [...tags, [...item.tag]];
 }
 
+function collectionHasItem(existing: NostrEvent | null, item: EmojiBrowserItem): boolean {
+  return (existing?.tags ?? []).some(
+    (tag) => tag[0] === 'emoji' && tag[1] === item.shortcode && tag[2] === item.imageUrl,
+  );
+}
+
 async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem): Promise<void> {
-  if (!ctx.state.currentPubkey) throw new Error('Connect an identity before adding emoji.');
+  const pubkey = ctx.state.currentPubkey;
+  if (!pubkey) throw new Error('Connect an identity before adding emoji.');
   if (item.added) {
     ctx.state.status = `:${item.shortcode}: is already in your collection.`;
     ctx.notify();
@@ -229,23 +271,35 @@ async function addToCollection(ctx: EmojiBrowserContext, item: EmojiBrowserItem)
   ctx.state.status = null;
   ctx.notify();
   try {
+    const latest = await loadCollectionEvent(pubkey);
+    if (latest && (!ctx.collectionEvent || latest.created_at >= ctx.collectionEvent.created_at)) {
+      ctx.collectionEvent = latest;
+      ctx.itemsDirty = true;
+    }
+    if (collectionHasItem(ctx.collectionEvent, item)) {
+      ctx.state.status = `:${item.shortcode}: is already in your collection.`;
+      flushRebuild(ctx);
+      return;
+    }
+    const tags = buildCollectionTags(ctx.collectionEvent, item);
     const published = await relay.publish({
       kind: KIND_USER_EMOJI_LIST,
       content: '',
-      tags: buildCollectionTags(ctx.collectionEvent, item),
+      tags,
       created_at: Math.floor(Date.now() / 1000),
     }) as NostrEvent;
     ctx.collectionEvent = published ?? {
       id: `local-${Date.now()}`,
-      pubkey: ctx.state.currentPubkey,
+      pubkey,
       kind: KIND_USER_EMOJI_LIST,
       created_at: Math.floor(Date.now() / 1000),
-      tags: buildCollectionTags(ctx.collectionEvent, item),
+      tags,
       content: '',
       sig: '',
     };
     ctx.state.status = `Added :${item.shortcode}:`;
-    rebuild(ctx);
+    ctx.itemsDirty = true;
+    flushRebuild(ctx);
   } catch (error) {
     ctx.state.error = error instanceof Error ? error.message : 'Unable to add emoji.';
     throw error;
@@ -262,6 +316,8 @@ export function createEmojiBrowserStore(onUpdate?: () => void): EmojiBrowserStor
     collectionEvent: null,
     subs: [],
     pendingEose: 0,
+    rebuildTimer: null,
+    itemsDirty: false,
     notify: () => onUpdate?.(),
   };
 

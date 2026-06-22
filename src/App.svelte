@@ -12,6 +12,7 @@
     EMOJI_RESOLVE_TIMEOUT_MS,
     resolvedEmojiItems,
     retryTimedOutEmojiResolutions,
+    selectActiveEmojiResolutionItems,
     setEmojiResolution,
     syncEmojiResolutions,
     type EmojiResolutionMap,
@@ -56,6 +57,7 @@
     );
   });
   const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
+  const resolverItems = $derived(selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey));
   const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
   const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
   const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
@@ -167,11 +169,13 @@
 <main>
   <header class="topbar">
     <div>
-      <h1>Emoji Browser</h1>
       <p>
-        {state.items.length - unresolvedCount} emoji from {state.followsCount} follows
+        {state.items.length} loaded emoji from {state.followsCount} follows
         {#if unresolvedCount > 0}
           <span class="inline-muted">· {unresolvedCount} unresolved</span>
+        {/if}
+        {#if timedOutCount > 0}
+          <span class="inline-muted">· {timedOutCount} timed out</span>
         {/if}
       </p>
     </div>
@@ -192,19 +196,17 @@
   </section>
 
   <div class="resolver-bin" aria-hidden="true">
-    {#each state.items as item (item.key)}
-      {#if resolutionByKey[item.key]?.status !== 'resolved'}
-        <img
-          use:resolveEmojiImage={{
-            key: item.key,
-            source: item.imageUrl,
-            attempt: resolutionByKey[item.key]?.attempt ?? 0,
-          }}
-          data-emoji-resolver
-          data-shortcode={item.shortcode}
-          alt=""
-        />
-      {/if}
+    {#each resolverItems as item (item.key)}
+      <img
+        use:resolveEmojiImage={{
+          key: item.key,
+          source: item.imageUrl,
+          attempt: resolutionByKey[item.key]?.attempt ?? 0,
+        }}
+        data-emoji-resolver
+        data-shortcode={item.shortcode}
+        alt=""
+      />
     {/each}
   </div>
 
@@ -260,8 +262,9 @@
         >
           {#if selected.added}Added
           {:else if state.publishingKey === selected.key}Adding
-          {:else}Add to collection{/if}
+          {:else}Add to preferred emojis{/if}
         </button>
+        <p class="pack-note">Use Emoji Sets to add this emoji to a named pack.</p>
       {:else}
         <p class="empty">Select an emoji.</p>
       {/if}
@@ -298,15 +301,9 @@
     justify-content: space-between;
   }
 
-  h1,
   h2,
   p {
     margin: 0;
-  }
-
-  h1 {
-    font-size: 16px;
-    line-height: 1.2;
   }
 
   h2 {
@@ -484,6 +481,12 @@
 
   .error {
     color: var(--hg-accent-red, #ff6b6b);
+  }
+
+  .pack-note {
+    margin: -4px 0 0;
+    color: var(--hg-text-muted, #b8b1a4);
+    font-size: 11px;
   }
 
   .empty {

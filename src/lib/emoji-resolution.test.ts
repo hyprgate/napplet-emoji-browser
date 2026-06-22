@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { EmojiBrowserItem } from './emoji-browser-store.js';
 import {
+  ACTIVE_EMOJI_RESOLVER_LIMIT,
   countTimedOutEmojiItems,
   countUnresolvedEmojiItems,
   resolvedEmojiItems,
   retryTimedOutEmojiResolutions,
+  selectActiveEmojiResolutionItems,
   setEmojiResolution,
   syncEmojiResolutions,
   type EmojiResolutionMap,
@@ -38,7 +40,7 @@ describe('emoji resolution helpers', () => {
     });
   });
 
-  it('only exposes custom emoji whose images have resolved', () => {
+  it('only returns emoji whose images have resolved while still counting unresolved loaded events', () => {
     const items = [item('ready'), item('pending'), item('timeout')];
     const resolutions: EmojiResolutionMap = {
       ready: { status: 'resolved', attempt: 0 },
@@ -52,8 +54,10 @@ describe('emoji resolution helpers', () => {
   });
 
   it('counts entries with no resolution state as unresolved', () => {
-    expect(countUnresolvedEmojiItems([item('missing')], {})).toBe(1);
-    expect(resolvedEmojiItems([item('missing')], {})).toEqual([]);
+    const items = [item('missing')];
+
+    expect(countUnresolvedEmojiItems(items, {})).toBe(1);
+    expect(resolvedEmojiItems(items, {}).map((emoji) => emoji.key)).toEqual([]);
   });
 
   it('creates missing resolution entries when the image action reports a result first', () => {
@@ -76,5 +80,32 @@ describe('emoji resolution helpers', () => {
       stale: { status: 'pending', attempt: 3 },
       pending: { status: 'pending', attempt: 1 },
     });
+  });
+
+  it('limits active image resolvers so large emoji lists cannot mount every hidden resolver at once', () => {
+    const items = Array.from({ length: ACTIVE_EMOJI_RESOLVER_LIMIT + 25 }, (_, index) =>
+      item(`emoji-${index}`),
+    );
+
+    expect(selectActiveEmojiResolutionItems(items, items, {}, ACTIVE_EMOJI_RESOLVER_LIMIT))
+      .toHaveLength(ACTIVE_EMOJI_RESOLVER_LIMIT);
+  });
+
+  it('prioritizes filtered unresolved emoji before background resolution work', () => {
+    const all = Array.from({ length: 8 }, (_, index) => item(`emoji-${index}`));
+    const filtered = [all[6]!, all[2]!, all[3]!];
+    const resolutions: EmojiResolutionMap = {
+      'emoji-0': { status: 'pending', attempt: 0 },
+      'emoji-1': { status: 'resolved', attempt: 0 },
+      'emoji-2': { status: 'pending', attempt: 0 },
+      'emoji-3': { status: 'timed-out', attempt: 0 },
+      'emoji-4': { status: 'pending', attempt: 0 },
+      'emoji-5': { status: 'pending', attempt: 0 },
+      'emoji-6': { status: 'pending', attempt: 0 },
+      'emoji-7': { status: 'pending', attempt: 0 },
+    };
+
+    expect(selectActiveEmojiResolutionItems(filtered, all, resolutions, 4).map((emoji) => emoji.key))
+      .toEqual(['emoji-6', 'emoji-2', 'emoji-0', 'emoji-4']);
   });
 });
