@@ -167,7 +167,6 @@
 <main>
   <header class="topbar">
     <div>
-      <h1>Emoji Browser</h1>
       <p>
         {state.items.length - unresolvedCount} emoji from {state.followsCount} follows
         {#if unresolvedCount > 0}
@@ -298,15 +297,9 @@
     justify-content: space-between;
   }
 
-  h1,
   h2,
   p {
     margin: 0;
-  }
-
-  h1 {
-    font-size: 16px;
-    line-height: 1.2;
   }
 
   h2 {
