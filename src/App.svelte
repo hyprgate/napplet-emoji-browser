@@ -259,8 +259,9 @@
         >
           {#if selected.added}Added
           {:else if state.publishingKey === selected.key}Adding
-          {:else}Add to collection{/if}
+          {:else}Add to preferred emojis{/if}
         </button>
+        <p class="pack-note">Use Emoji Sets to add this emoji to a named pack.</p>
       {:else}
         <p class="empty">Select an emoji.</p>
       {/if}
@@ -477,6 +478,12 @@
 
   .error {
     color: var(--hg-accent-red, #ff6b6b);
+  }
+
+  .pack-note {
+    margin: -4px 0 0;
+    color: var(--hg-text-muted, #b8b1a4);
+    font-size: 11px;
   }
 
   .empty {
