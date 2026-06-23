@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import {
-    loadResourceObjectUrl,
+    loadResourceObjectUrls,
     resourceImage,
-    type ResourceObjectUrlSubscription,
   } from '@hyprgate/utils';
   import { storage } from '@napplet/sdk';
   import { createEmojiBrowserStore, type EmojiBrowserItem } from './lib/emoji-browser-store.js';
@@ -51,6 +50,7 @@
   let selectedKey = $state<string | null>(null);
   let resolutionByKey = $state<EmojiResolutionMap>({});
   let resolvedSourceHints = $state<string[]>([]);
+  let resolverUrlBySource = $state<Record<string, string>>({});
 
   const filteredItems = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -124,9 +124,23 @@
     replaceResolutionMap(retryTimedOutEmojiResolutions(resolutionByKey));
   }
 
-  function resolveEmojiImage(node: HTMLImageElement, params: EmojiResolveParams) {
+  function setResolverUrl(source: string, resolvedUrl: string | null): void {
+    if (resolvedUrl) {
+      if (resolverUrlBySource[source] === resolvedUrl) return;
+      resolverUrlBySource = { ...resolverUrlBySource, [source]: resolvedUrl };
+      return;
+    }
+    if (!(source in resolverUrlBySource)) return;
+    const next = { ...resolverUrlBySource };
+    delete next[source];
+    resolverUrlBySource = next;
+  }
+
+  function resolveEmojiImage(
+    node: HTMLImageElement,
+    params: EmojiResolveParams & { resolvedUrl: string | null },
+  ) {
     let current = params;
-    let subscription: ResourceObjectUrlSubscription | null = null;
     let timeout: ReturnType<typeof setTimeout> | null = null;
 
     function clearTimer(): void {
@@ -135,26 +149,14 @@
       timeout = null;
     }
 
-    function closeSubscription(): void {
-      subscription?.close();
-      subscription = null;
-    }
-
-    function start(next: EmojiResolveParams): void {
+    function start(next: EmojiResolveParams & { resolvedUrl: string | null }): void {
       clearTimer();
-      closeSubscription();
       node.removeAttribute('src');
       timeout = setTimeout(() => {
         timeout = null;
         setResolution(next, 'timed-out');
       }, EMOJI_RESOLVE_TIMEOUT_MS);
-      subscription = loadResourceObjectUrl(next.source, (resolvedUrl) => {
-        if (resolvedUrl) node.src = resolvedUrl;
-        else node.removeAttribute('src');
-      }, {
-        refresh: next.attempt > 0,
-        onError: () => setResolution(next, 'timed-out'),
-      });
+      if (next.resolvedUrl) node.src = next.resolvedUrl;
     }
 
     function handleLoad(): void {
@@ -163,6 +165,7 @@
     }
 
     function handleError(): void {
+      clearTimer();
       setResolution(current, 'timed-out');
     }
 
@@ -176,13 +179,13 @@
           next.key === current.key
           && next.source === current.source
           && next.attempt === current.attempt
+          && next.resolvedUrl === current.resolvedUrl
         ) return;
         current = next;
         start(current);
       },
       destroy(): void {
         clearTimer();
-        closeSubscription();
         node.removeEventListener('load', handleLoad);
         node.removeEventListener('error', handleError);
       },
@@ -191,6 +194,21 @@
 
   $effect(() => {
     replaceResolutionMap(syncEmojiResolutions(state.items, resolutionByKey));
+  });
+
+  $effect(() => {
+    const items = resolverItems;
+    if (items.length === 0) return;
+
+    const subscription = loadResourceObjectUrls(
+      items.map((item) => item.imageUrl),
+      setResolverUrl,
+      {
+        refresh: items.some((item) => (resolutionByKey[item.key]?.attempt ?? 0) > 0),
+      },
+    );
+
+    return () => subscription.close();
   });
 </script>
 
@@ -230,6 +248,7 @@
           key: item.key,
           source: item.imageUrl,
           attempt: resolutionByKey[item.key]?.attempt ?? 0,
+          resolvedUrl: resolverUrlBySource[item.imageUrl] ?? null,
         }}
         data-emoji-resolver
         data-shortcode={item.shortcode}
