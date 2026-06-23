@@ -5,15 +5,16 @@
     resourceImage,
     type ResourceObjectUrlSubscription,
   } from '@hyprgate/utils';
+  import { storage } from '@napplet/sdk';
   import { createEmojiBrowserStore, type EmojiBrowserItem } from './lib/emoji-browser-store.js';
   import {
     countTimedOutEmojiItems,
     countUnresolvedEmojiItems,
     EMOJI_RESOLVE_TIMEOUT_MS,
+    setEmojiResolutionForSource,
     resolvedEmojiItems,
     retryTimedOutEmojiResolutions,
     selectActiveEmojiResolutionItems,
-    setEmojiResolution,
     syncEmojiResolutions,
     type EmojiResolutionMap,
     type EmojiResolveStatus,
@@ -24,6 +25,9 @@
     source: string;
     attempt: number;
   }
+
+  const RESOLVED_RESOURCE_HINTS_KEY = 'emoji-browser:resolved-resource-sources:v1';
+  const MAX_RESOLVED_RESOURCE_HINTS = 128;
 
   let version = $state(0);
   const store = createEmojiBrowserStore(() => {
@@ -46,6 +50,7 @@
   let query = $state('');
   let selectedKey = $state<string | null>(null);
   let resolutionByKey = $state<EmojiResolutionMap>({});
+  let resolvedSourceHints = $state<string[]>([]);
 
   const filteredItems = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -57,7 +62,9 @@
     );
   });
   const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
-  const resolverItems = $derived(selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey));
+  const resolverItems = $derived(
+    selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey, undefined, resolvedSourceHints),
+  );
   const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
   const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
   const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
@@ -68,6 +75,7 @@
 
   onMount(() => {
     store.load();
+    void loadResolvedSourceHints();
   });
 
   onDestroy(() => store.destroy());
@@ -88,8 +96,28 @@
     if (next !== resolutionByKey) resolutionByKey = next;
   }
 
-  function setResolution(key: string, next: EmojiResolveStatus): void {
-    replaceResolutionMap(setEmojiResolution(resolutionByKey, key, next));
+  async function loadResolvedSourceHints(): Promise<void> {
+    try {
+      const raw = await storage.getItem(RESOLVED_RESOURCE_HINTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return;
+      resolvedSourceHints = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0);
+    } catch {
+      // Storage is only a priority hint; resource service remains source of truth.
+    }
+  }
+
+  function rememberResolvedSource(source: string): void {
+    if (!source) return;
+    const next = [source, ...resolvedSourceHints.filter((candidate) => candidate !== source)]
+      .slice(0, MAX_RESOLVED_RESOURCE_HINTS);
+    resolvedSourceHints = next;
+    void storage.setItem(RESOLVED_RESOURCE_HINTS_KEY, JSON.stringify(next)).catch(() => {});
+  }
+
+  function setResolution(params: EmojiResolveParams, next: EmojiResolveStatus): void {
+    replaceResolutionMap(setEmojiResolutionForSource(state.items, resolutionByKey, params.source, next));
+    if (next === 'resolved') rememberResolvedSource(params.source);
   }
 
   function retryTimedOut(): void {
@@ -118,24 +146,24 @@
       node.removeAttribute('src');
       timeout = setTimeout(() => {
         timeout = null;
-        setResolution(next.key, 'timed-out');
+        setResolution(next, 'timed-out');
       }, EMOJI_RESOLVE_TIMEOUT_MS);
       subscription = loadResourceObjectUrl(next.source, (resolvedUrl) => {
         if (resolvedUrl) node.src = resolvedUrl;
         else node.removeAttribute('src');
       }, {
         refresh: next.attempt > 0,
-        onError: () => setResolution(next.key, 'timed-out'),
+        onError: () => setResolution(next, 'timed-out'),
       });
     }
 
     function handleLoad(): void {
       clearTimer();
-      setResolution(current.key, 'resolved');
+      setResolution(current, 'resolved');
     }
 
     function handleError(): void {
-      setResolution(current.key, 'timed-out');
+      setResolution(current, 'timed-out');
     }
 
     node.addEventListener('load', handleLoad);

@@ -8,7 +8,7 @@ export default defineConfig({
     svelte(),
     nip5aManifest({
       nappletType: 'emoji-browser',
-      requires: ['identity', 'relay', 'outbox', 'resource', 'theme'],
+      requires: ['identity', 'relay', 'outbox', 'resource', 'storage', 'theme'],
       artifactMode: 'single-file',
     }),
   ],
