@@ -550,6 +550,10 @@
     grid-auto-rows: 92px;
     gap: 8px;
     min-height: 0;
+    /* Keep cells in their own stacking context below the sticky header band so a
+       transformed/hovered card never paints over a header (Bug 2). */
+    position: relative;
+    z-index: 0;
   }
 
   .group-header {
@@ -558,10 +562,25 @@
     gap: 8px;
     position: sticky;
     top: 0;
-    z-index: 1;
-    padding: 4px 2px;
+    /* Sit above the emoji cells (which can establish their own stacking via
+       images/transforms) so a sticky header never clips into the row above. */
+    z-index: 2;
+    /* The .groups flex column uses gap:8px; a transparent gap above a sticky
+       header lets the previous row's emoji cells show through as you scroll.
+       Pull up and pad to bridge the gap with the opaque header background. */
+    margin-top: -8px;
+    padding: 12px 2px 4px;
+    /* Opaque, even when the theme token is unset — emoji cells must not bleed
+       through the sticky header. */
     background: var(--hg-bg-base, #050505);
     border-bottom: 1px solid var(--hg-border-muted, #242424);
+  }
+
+  /* The first header in the scroll container has no preceding row to cover, so
+     it should not pull up past the top of the list. */
+  .group-header:first-child {
+    margin-top: 0;
+    padding-top: 4px;
   }
 
   .group-header.mine {
