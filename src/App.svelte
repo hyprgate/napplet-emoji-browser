@@ -372,43 +372,45 @@
         </p>
       {:else}
         {#each groups as group (group.key)}
-          {#if group.kind !== 'arrival'}
-            <div class="group-header" class:mine={group.mine}>
-              {#if group.kind === 'pubkey'}
-                {@const author = authorIdentity(group.authorPubkey)}
+          <div class="emoji-group">
+            {#if group.kind !== 'arrival'}
+              <div class="group-header" class:mine={group.mine}>
+                {#if group.kind === 'pubkey'}
+                  {@const author = authorIdentity(group.authorPubkey)}
+                  <button
+                    type="button"
+                    class="author"
+                    title={group.authorPubkey}
+                    onclick={() => openAuthorProfile(group.authorPubkey)}
+                  >
+                    {#if author.picture}
+                      <img class="author-avatar" use:resourceImage={author.picture} alt="" loading="lazy" />
+                    {:else}
+                      <span class="author-avatar placeholder" aria-hidden="true"></span>
+                    {/if}
+                    <span class="author-name">{author.label}</span>
+                  </button>
+                {:else}
+                  <span class="group-title" title={group.title}>{group.title}</span>
+                {/if}
+                {#if group.mine}<span class="mine-badge">You</span>{/if}
+              </div>
+            {/if}
+            <div class="grid">
+              {#each group.items as item (item.key)}
                 <button
                   type="button"
-                  class="author"
-                  title={group.authorPubkey}
-                  onclick={() => openAuthorProfile(group.authorPubkey)}
+                  class="emoji-card"
+                  class:selected={selected?.key === item.key}
+                  class:added={item.added}
+                  onclick={() => (selectedKey = item.key)}
+                  title={`:${item.shortcode}:`}
                 >
-                  {#if author.picture}
-                    <img class="author-avatar" use:resourceImage={author.picture} alt="" loading="lazy" />
-                  {:else}
-                    <span class="author-avatar placeholder" aria-hidden="true"></span>
-                  {/if}
-                  <span class="author-name">{author.label}</span>
+                  <img use:resourceImage={item.imageUrl} alt={`:${item.shortcode}:`} loading="lazy" />
+                  <span>:{item.shortcode}:</span>
                 </button>
-              {:else}
-                <span class="group-title" title={group.title}>{group.title}</span>
-              {/if}
-              {#if group.mine}<span class="mine-badge">You</span>{/if}
+              {/each}
             </div>
-          {/if}
-          <div class="grid">
-            {#each group.items as item (item.key)}
-              <button
-                type="button"
-                class="emoji-card"
-                class:selected={selected?.key === item.key}
-                class:added={item.added}
-                onclick={() => (selectedKey = item.key)}
-                title={`:${item.shortcode}:`}
-              >
-                <img use:resourceImage={item.imageUrl} alt={`:${item.shortcode}:`} loading="lazy" />
-                <span>:{item.shortcode}:</span>
-              </button>
-            {/each}
           </div>
         {/each}
       {/if}
@@ -544,6 +546,13 @@
     padding-right: 2px;
   }
 
+  .emoji-group {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
@@ -556,9 +565,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    position: sticky;
-    top: 0;
-    z-index: 1;
     padding: 4px 2px;
     background: var(--hg-bg-base, #050505);
     border-bottom: 1px solid var(--hg-border-muted, #242424);
