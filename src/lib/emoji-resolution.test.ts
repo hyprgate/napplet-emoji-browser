@@ -8,6 +8,7 @@ import {
   retryTimedOutEmojiResolutions,
   selectActiveEmojiResolutionItems,
   setEmojiResolution,
+  setEmojiResolutionForSource,
   syncEmojiResolutions,
   type EmojiResolutionMap,
 } from './emoji-resolution.js';
@@ -91,6 +92,26 @@ describe('emoji resolution helpers', () => {
       .toHaveLength(ACTIVE_EMOJI_RESOLVER_LIMIT);
   });
 
+  it('coalesces duplicate image URLs into one active resolver', () => {
+    const first = item('first', 'shared');
+    const duplicate = { ...item('duplicate', 'shared'), imageUrl: first.imageUrl };
+    const other = item('other');
+
+    expect(selectActiveEmojiResolutionItems([first, duplicate, other], [first, duplicate, other], {}, 8)
+      .map((emoji) => emoji.key))
+      .toEqual(['first', 'other']);
+  });
+
+  it('marks duplicate image URLs resolved after one resource result', () => {
+    const first = item('first', 'shared');
+    const duplicate = { ...item('duplicate', 'shared'), imageUrl: first.imageUrl };
+
+    expect(setEmojiResolutionForSource([first, duplicate], {}, first.imageUrl, 'resolved')).toEqual({
+      first: { status: 'resolved', attempt: 0 },
+      duplicate: { status: 'resolved', attempt: 0 },
+    });
+  });
+
   it('prioritizes filtered unresolved emoji before background resolution work', () => {
     const all = Array.from({ length: 8 }, (_, index) => item(`emoji-${index}`));
     const filtered = [all[6]!, all[2]!, all[3]!];
@@ -107,5 +128,14 @@ describe('emoji resolution helpers', () => {
 
     expect(selectActiveEmojiResolutionItems(filtered, all, resolutions, 4).map((emoji) => emoji.key))
       .toEqual(['emoji-6', 'emoji-2', 'emoji-0', 'emoji-4']);
+  });
+
+  it('uses stored resolved-source hints before low-priority background work', () => {
+    const all = Array.from({ length: 6 }, (_, index) => item(`emoji-${index}`));
+    const filtered = [all[5]!];
+
+    expect(selectActiveEmojiResolutionItems(filtered, all, {}, 3, [all[3]!.imageUrl, all[1]!.imageUrl])
+      .map((emoji) => emoji.key))
+      .toEqual(['emoji-5', 'emoji-1', 'emoji-3']);
   });
 });

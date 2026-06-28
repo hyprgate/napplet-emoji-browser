@@ -1,19 +1,34 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import {
-    loadResourceObjectUrl,
+    loadResourceObjectUrls,
     resourceImage,
-    type ResourceObjectUrlSubscription,
   } from '@hyprgate/utils';
-  import { createEmojiBrowserStore, type EmojiBrowserItem } from './lib/emoji-browser-store.js';
+  import { inc as ipc, storage } from '@napplet/sdk';
+  import {
+    createEmojiBrowserStore,
+    DEFAULT_EMOJI_BROWSER_PREFS,
+    groupEmojiItems,
+    parseEmojiBrowserPrefs,
+    serializeEmojiBrowserPrefs,
+    type EmojiBrowserItem,
+    type EmojiBrowserPrefs,
+    type EmojiGroupMode,
+  } from './lib/emoji-browser-store.js';
+  import {
+    createAuthorProfileResolver,
+    fallbackAuthorIdentity,
+    type AuthorIdentity,
+    type AuthorIdentityMap,
+  } from './lib/author-profiles.js';
   import {
     countTimedOutEmojiItems,
     countUnresolvedEmojiItems,
     EMOJI_RESOLVE_TIMEOUT_MS,
+    setEmojiResolutionForSource,
     resolvedEmojiItems,
     retryTimedOutEmojiResolutions,
     selectActiveEmojiResolutionItems,
-    setEmojiResolution,
     syncEmojiResolutions,
     type EmojiResolutionMap,
     type EmojiResolveStatus,
@@ -24,6 +39,17 @@
     source: string;
     attempt: number;
   }
+
+  const RESOLVED_RESOURCE_HINTS_KEY = 'emoji-browser:resolved-resource-sources:v1';
+  const MAX_RESOLVED_RESOURCE_HINTS = 128;
+  // NAP-STORAGE global (napplet-shared) scope: persists across window instances.
+  const VIEW_PREFS_KEY = 'emoji-browser:prefs:v1';
+
+  const GROUP_MODE_LABELS: Record<EmojiGroupMode, string> = {
+    arrival: 'Arrival',
+    pack: 'Pack',
+    pubkey: 'Author',
+  };
 
   let version = $state(0);
   const store = createEmojiBrowserStore(() => {
@@ -40,12 +66,26 @@
       error: store.state.error,
       status: store.state.status,
       publishingKey: store.state.publishingKey,
+      currentPubkey: store.state.currentPubkey,
+      preferredListConfirmed: store.state.preferredListConfirmed,
     };
   });
 
   let query = $state('');
   let selectedKey = $state<string | null>(null);
   let resolutionByKey = $state<EmojiResolutionMap>({});
+  let resolvedSourceHints = $state<string[]>([]);
+  let resolverUrlBySource = $state<Record<string, string>>({});
+
+  let prefs = $state<EmojiBrowserPrefs>({ ...DEFAULT_EMOJI_BROWSER_PREFS });
+  let authorIdentities = $state<AuthorIdentityMap>({});
+  const profileResolver = createAuthorProfileResolver((identity) => {
+    authorIdentities = { ...authorIdentities, [identity.pubkey]: identity };
+  });
+
+  function authorIdentity(pubkey: string): AuthorIdentity {
+    return authorIdentities[pubkey] ?? fallbackAuthorIdentity(pubkey);
+  }
 
   const filteredItems = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -57,7 +97,9 @@
     );
   });
   const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
-  const resolverItems = $derived(selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey));
+  const resolverItems = $derived(
+    selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey, undefined, resolvedSourceHints),
+  );
   const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
   const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
   const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
@@ -66,11 +108,53 @@
     visibleItems.find((item) => item.key === selectedKey) ?? visibleItems[0] ?? null,
   );
 
+  const groups = $derived(
+    groupEmojiItems(visibleItems, prefs.groupMode, state.currentPubkey, prefs.inlineMine),
+  );
+
+  // Resolve pubkey-group author identities lazily through NAP-COMMON.
+  $effect(() => {
+    if (prefs.groupMode !== 'pubkey') return;
+    for (const group of groups) {
+      if (group.authorPubkey) profileResolver.request(group.authorPubkey);
+    }
+  });
+
   onMount(() => {
     store.load();
+    void loadResolvedSourceHints();
+    void loadViewPrefs();
   });
 
   onDestroy(() => store.destroy());
+
+  async function loadViewPrefs(): Promise<void> {
+    try {
+      const raw = await storage.getItem(VIEW_PREFS_KEY);
+      prefs = parseEmojiBrowserPrefs(raw);
+    } catch {
+      // Persisted prefs are best-effort; defaults remain in effect.
+    }
+  }
+
+  function persistViewPrefs(next: EmojiBrowserPrefs): void {
+    prefs = next;
+    void storage.setItem(VIEW_PREFS_KEY, serializeEmojiBrowserPrefs(next)).catch(() => {});
+  }
+
+  function setGroupMode(mode: EmojiGroupMode): void {
+    if (prefs.groupMode === mode) return;
+    persistViewPrefs({ ...prefs, groupMode: mode });
+  }
+
+  function toggleInlineMine(): void {
+    persistViewPrefs({ ...prefs, inlineMine: !prefs.inlineMine });
+  }
+
+  function openAuthorProfile(pubkey: string): void {
+    if (!pubkey) return;
+    ipc.emit('profile:open', [], JSON.stringify({ pubkey }));
+  }
 
   function shortPubkey(pubkey: string): string {
     return pubkey.length > 12 ? `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}` : pubkey;
@@ -88,17 +172,51 @@
     if (next !== resolutionByKey) resolutionByKey = next;
   }
 
-  function setResolution(key: string, next: EmojiResolveStatus): void {
-    replaceResolutionMap(setEmojiResolution(resolutionByKey, key, next));
+  async function loadResolvedSourceHints(): Promise<void> {
+    try {
+      const raw = await storage.getItem(RESOLVED_RESOURCE_HINTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return;
+      resolvedSourceHints = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0);
+    } catch {
+      // Storage is only a priority hint; resource service remains source of truth.
+    }
+  }
+
+  function rememberResolvedSource(source: string): void {
+    if (!source) return;
+    const next = [source, ...resolvedSourceHints.filter((candidate) => candidate !== source)]
+      .slice(0, MAX_RESOLVED_RESOURCE_HINTS);
+    resolvedSourceHints = next;
+    void storage.setItem(RESOLVED_RESOURCE_HINTS_KEY, JSON.stringify(next)).catch(() => {});
+  }
+
+  function setResolution(params: EmojiResolveParams, next: EmojiResolveStatus): void {
+    replaceResolutionMap(setEmojiResolutionForSource(state.items, resolutionByKey, params.source, next));
+    if (next === 'resolved') rememberResolvedSource(params.source);
   }
 
   function retryTimedOut(): void {
     replaceResolutionMap(retryTimedOutEmojiResolutions(resolutionByKey));
   }
 
-  function resolveEmojiImage(node: HTMLImageElement, params: EmojiResolveParams) {
+  function setResolverUrl(source: string, resolvedUrl: string | null): void {
+    if (resolvedUrl) {
+      if (resolverUrlBySource[source] === resolvedUrl) return;
+      resolverUrlBySource = { ...resolverUrlBySource, [source]: resolvedUrl };
+      return;
+    }
+    if (!(source in resolverUrlBySource)) return;
+    const next = { ...resolverUrlBySource };
+    delete next[source];
+    resolverUrlBySource = next;
+  }
+
+  function resolveEmojiImage(
+    node: HTMLImageElement,
+    params: EmojiResolveParams & { resolvedUrl: string | null },
+  ) {
     let current = params;
-    let subscription: ResourceObjectUrlSubscription | null = null;
     let timeout: ReturnType<typeof setTimeout> | null = null;
 
     function clearTimer(): void {
@@ -107,35 +225,24 @@
       timeout = null;
     }
 
-    function closeSubscription(): void {
-      subscription?.close();
-      subscription = null;
-    }
-
-    function start(next: EmojiResolveParams): void {
+    function start(next: EmojiResolveParams & { resolvedUrl: string | null }): void {
       clearTimer();
-      closeSubscription();
       node.removeAttribute('src');
       timeout = setTimeout(() => {
         timeout = null;
-        setResolution(next.key, 'timed-out');
+        setResolution(next, 'timed-out');
       }, EMOJI_RESOLVE_TIMEOUT_MS);
-      subscription = loadResourceObjectUrl(next.source, (resolvedUrl) => {
-        if (resolvedUrl) node.src = resolvedUrl;
-        else node.removeAttribute('src');
-      }, {
-        refresh: next.attempt > 0,
-        onError: () => setResolution(next.key, 'timed-out'),
-      });
+      if (next.resolvedUrl) node.src = next.resolvedUrl;
     }
 
     function handleLoad(): void {
       clearTimer();
-      setResolution(current.key, 'resolved');
+      setResolution(current, 'resolved');
     }
 
     function handleError(): void {
-      setResolution(current.key, 'timed-out');
+      clearTimer();
+      setResolution(current, 'timed-out');
     }
 
     node.addEventListener('load', handleLoad);
@@ -148,13 +255,13 @@
           next.key === current.key
           && next.source === current.source
           && next.attempt === current.attempt
+          && next.resolvedUrl === current.resolvedUrl
         ) return;
         current = next;
         start(current);
       },
       destroy(): void {
         clearTimer();
-        closeSubscription();
         node.removeEventListener('load', handleLoad);
         node.removeEventListener('error', handleError);
       },
@@ -163,6 +270,21 @@
 
   $effect(() => {
     replaceResolutionMap(syncEmojiResolutions(state.items, resolutionByKey));
+  });
+
+  $effect(() => {
+    const items = resolverItems;
+    if (items.length === 0) return;
+
+    const subscription = loadResourceObjectUrls(
+      items.map((item) => item.imageUrl),
+      setResolverUrl,
+      {
+        refresh: items.some((item) => (resolutionByKey[item.key]?.attempt ?? 0) > 0),
+      },
+    );
+
+    return () => subscription.close();
   });
 </script>
 
@@ -186,6 +308,29 @@
 
   <section class="toolbar">
     <input bind:value={query} placeholder="Filter shortcode, set, or pubkey" aria-label="Filter emoji" />
+    <div class="group-modes" role="group" aria-label="Group emoji by">
+      {#each (['arrival', 'pack', 'pubkey'] as const) as mode (mode)}
+        <button
+          type="button"
+          class="ghost mode"
+          class:active={prefs.groupMode === mode}
+          aria-pressed={prefs.groupMode === mode}
+          onclick={() => setGroupMode(mode)}
+        >
+          {GROUP_MODE_LABELS[mode]}
+        </button>
+      {/each}
+    </div>
+    <button
+      type="button"
+      class="ghost mode"
+      class:active={prefs.inlineMine}
+      aria-pressed={prefs.inlineMine}
+      title="Show your own emoji inline (pinned to top)"
+      onclick={toggleInlineMine}
+    >
+      Inline mine
+    </button>
     {#if timedOutCount > 0}
       <button type="button" class="ghost retry" onclick={retryTimedOut}>
         Try again ({timedOutCount})
@@ -202,6 +347,7 @@
           key: item.key,
           source: item.imageUrl,
           attempt: resolutionByKey[item.key]?.attempt ?? 0,
+          resolvedUrl: resolverUrlBySource[item.imageUrl] ?? null,
         }}
         data-emoji-resolver
         data-shortcode={item.shortcode}
@@ -211,30 +357,61 @@
   </div>
 
   <section class="layout">
-    <div class="grid" aria-label="Discovered custom emoji">
-      {#if visibleItems.length === 0}
+    <div class="groups" aria-label="Discovered custom emoji">
+      {#if groups.length === 0}
         <p class="empty">
           {#if state.loading}
             Loading custom emoji...
           {:else if filteredItems.length === 0}
             No custom emoji found.
+          {:else if !prefs.inlineMine && visibleItems.length === 0}
+            Your own emoji are hidden. Enable Inline mine to show them.
           {:else}
             Resolving custom emoji images. {filteredUnresolvedCount} unresolved.
           {/if}
         </p>
       {:else}
-        {#each visibleItems as item (item.key)}
-          <button
-            type="button"
-            class="emoji-card"
-            class:selected={selected?.key === item.key}
-            class:added={item.added}
-            onclick={() => (selectedKey = item.key)}
-            title={`:${item.shortcode}:`}
-          >
-            <img use:resourceImage={item.imageUrl} alt={`:${item.shortcode}:`} loading="lazy" />
-            <span>:{item.shortcode}:</span>
-          </button>
+        {#each groups as group (group.key)}
+          <div class="emoji-group">
+            {#if group.kind !== 'arrival'}
+              <div class="group-header" class:mine={group.mine}>
+                {#if group.kind === 'pubkey'}
+                  {@const author = authorIdentity(group.authorPubkey)}
+                  <button
+                    type="button"
+                    class="author"
+                    title={group.authorPubkey}
+                    onclick={() => openAuthorProfile(group.authorPubkey)}
+                  >
+                    {#if author.picture}
+                      <img class="author-avatar" use:resourceImage={author.picture} alt="" loading="lazy" />
+                    {:else}
+                      <span class="author-avatar placeholder" aria-hidden="true"></span>
+                    {/if}
+                    <span class="author-name">{author.label}</span>
+                  </button>
+                {:else}
+                  <span class="group-title" title={group.title}>{group.title}</span>
+                {/if}
+                {#if group.mine}<span class="mine-badge">You</span>{/if}
+              </div>
+            {/if}
+            <div class="grid">
+              {#each group.items as item (item.key)}
+                <button
+                  type="button"
+                  class="emoji-card"
+                  class:selected={selected?.key === item.key}
+                  class:added={item.added}
+                  onclick={() => (selectedKey = item.key)}
+                  title={`:${item.shortcode}:`}
+                >
+                  <img use:resourceImage={item.imageUrl} alt={`:${item.shortcode}:`} loading="lazy" />
+                  <span>:{item.shortcode}:</span>
+                </button>
+              {/each}
+            </div>
+          </div>
         {/each}
       {/if}
     </div>
@@ -360,14 +537,108 @@
     min-height: 0;
   }
 
+  .groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 2px;
+  }
+
+  .emoji-group {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
     grid-auto-rows: 92px;
     gap: 8px;
     min-height: 0;
-    overflow: auto;
-    padding-right: 2px;
+  }
+
+  .group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px;
+    background: var(--hg-bg-base, #050505);
+    border-bottom: 1px solid var(--hg-border-muted, #242424);
+  }
+
+  .group-header.mine {
+    border-bottom-color: color-mix(in srgb, var(--hg-accent-green, #9be564) 50%, var(--hg-border-muted, #242424));
+  }
+
+  .group-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  .author {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 2px 4px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .author:hover .author-name {
+    color: var(--hg-accent-cyan, #82d8f7);
+  }
+
+  .author-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex: none;
+  }
+
+  .author-avatar.placeholder {
+    background: var(--hg-surface, #101010);
+    border: 1px solid var(--hg-border, #303030);
+  }
+
+  .author-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  .mine-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--hg-accent-green, #9be564);
+    border: 1px solid color-mix(in srgb, var(--hg-accent-green, #9be564) 50%, var(--hg-border, #303030));
+  }
+
+  .group-modes {
+    display: inline-flex;
+    gap: 4px;
+  }
+
+  .mode {
+    white-space: nowrap;
+  }
+
+  .mode.active {
+    border-color: var(--hg-accent-cyan, #82d8f7);
+    color: var(--hg-accent-cyan, #82d8f7);
   }
 
   .emoji-card,

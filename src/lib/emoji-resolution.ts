@@ -1,7 +1,7 @@
 import type { EmojiBrowserItem } from './emoji-browser-store.js';
 
 export const EMOJI_RESOLVE_TIMEOUT_MS = 5_000;
-export const ACTIVE_EMOJI_RESOLVER_LIMIT = 48;
+export const ACTIVE_EMOJI_RESOLVER_LIMIT = 12;
 
 export type EmojiResolveStatus = 'pending' | 'resolved' | 'timed-out';
 
@@ -45,6 +45,20 @@ export function setEmojiResolution(
   };
 }
 
+export function setEmojiResolutionForSource<T extends Pick<EmojiBrowserItem, 'key' | 'imageUrl'>>(
+  items: readonly T[],
+  current: EmojiResolutionMap,
+  source: string,
+  status: EmojiResolveStatus,
+): EmojiResolutionMap {
+  let next = current;
+  for (const item of items) {
+    if (item.imageUrl !== source) continue;
+    next = setEmojiResolution(next, item.key, status);
+  }
+  return next;
+}
+
 export function retryTimedOutEmojiResolutions(current: EmojiResolutionMap): EmojiResolutionMap {
   const next = { ...current };
   let changed = false;
@@ -63,18 +77,21 @@ export function resolvedEmojiItems<T extends Pick<EmojiBrowserItem, 'key'>>(
   return items.filter((item) => resolutions[item.key]?.status === 'resolved');
 }
 
-export function selectActiveEmojiResolutionItems<T extends Pick<EmojiBrowserItem, 'key'>>(
+export function selectActiveEmojiResolutionItems<T extends Pick<EmojiBrowserItem, 'key' | 'imageUrl'>>(
   priorityItems: readonly T[],
   allItems: readonly T[],
   resolutions: EmojiResolutionMap,
   limit = ACTIVE_EMOJI_RESOLVER_LIMIT,
+  preferredSources: readonly string[] = [],
 ): T[] {
   const selected: T[] = [];
-  const seen = new Set<string>();
+  const seenKeys = new Set<string>();
+  const seenSources = new Set<string>();
+  const preferredSourceSet = new Set(preferredSources);
   const max = Math.max(0, Math.floor(limit));
 
   function canResolve(item: T): boolean {
-    if (seen.has(item.key)) return false;
+    if (seenKeys.has(item.key) || seenSources.has(item.imageUrl)) return false;
     const status = resolutions[item.key]?.status;
     return status === undefined || status === 'pending';
   }
@@ -83,12 +100,14 @@ export function selectActiveEmojiResolutionItems<T extends Pick<EmojiBrowserItem
     for (const item of items) {
       if (selected.length >= max) return;
       if (!canResolve(item)) continue;
-      seen.add(item.key);
+      seenKeys.add(item.key);
+      seenSources.add(item.imageUrl);
       selected.push(item);
     }
   }
 
   append(priorityItems);
+  append(allItems.filter((item) => preferredSourceSet.has(item.imageUrl)));
   append(allItems);
   return selected;
 }
