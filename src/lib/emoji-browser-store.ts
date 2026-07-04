@@ -231,13 +231,13 @@ function handleEose(ctx: EmojiBrowserContext): void {
 function subscribe(ctx: EmojiBrowserContext, filter: NostrFilter, useOutbox: boolean): void {
   ctx.pendingEose += 1;
   if (useOutbox) {
-    const sub = outbox.subscribe(filter, { strategy: 'outbox', live: true });
-    sub.on('event', (event) => rememberEvent(ctx, event as NostrEvent));
-    sub.on('eose', () => handleEose(ctx));
+    const sub = outbox.subscribe(filter, { strategy: 'outbox', live: false });
+    sub.on('event', (result) => rememberEvent(ctx, result.event as NostrEvent));
+    sub.on('closed', () => handleEose(ctx));
     ctx.subs.push({ close: () => sub.close() });
     return;
   }
-  ctx.subs.push(relay.subscribe(filter, (event) => rememberEvent(ctx, event as NostrEvent), () => handleEose(ctx)));
+  ctx.subs.push(relay.subscribe(filter, (result) => rememberEvent(ctx, result.event as NostrEvent), () => handleEose(ctx)));
 }
 
 async function loadCollectionEvent(pubkey: string): Promise<NostrEvent | null> {
@@ -247,7 +247,8 @@ async function loadCollectionEvent(pubkey: string): Promise<NostrEvent | null> {
   // (rememberCollectionEvent / handleEose), so a null here never relaxes the
   // #173 merge-safety gate.
   try {
-    const events = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: USER_EMOJI_LIST_QUERY_LIMIT }]);
+    const results = await relay.query([{ kinds: [KIND_USER_EMOJI_LIST], authors: [pubkey], limit: USER_EMOJI_LIST_QUERY_LIMIT }]);
+    const events = results.map((result) => result.event as NostrEvent);
     return latestUserEmojiListEvent(events, pubkey);
   } catch {
     return null;

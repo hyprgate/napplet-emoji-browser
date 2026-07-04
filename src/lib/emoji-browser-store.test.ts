@@ -47,6 +47,7 @@ function emojiItem(overrides: Partial<EmojiBrowserItem> & Pick<EmojiBrowserItem,
 
 const PUBKEY = 'a'.repeat(64);
 const FOLLOW = 'b'.repeat(64);
+type RelayEventResult = { event: NostrEvent };
 
 function event(overrides: Partial<NostrEvent>): NostrEvent {
   return {
@@ -165,12 +166,12 @@ describe('emoji browser helpers', () => {
     });
     vi.mocked(relay.query)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([baseline]);
+      .mockResolvedValueOnce([{ event: baseline }]);
 
-    let onEvent: ((event: NostrEvent) => void) | null = null;
+    let onEvent: ((result: RelayEventResult) => void) | null = null;
     let onEose: (() => void) | null = null;
     vi.mocked(relay.subscribe).mockImplementation((_filter, eventCallback, eoseCallback) => {
-      onEvent = eventCallback as (event: NostrEvent) => void;
+      onEvent = eventCallback as (result: RelayEventResult) => void;
       onEose = eoseCallback as () => void;
       return { close: vi.fn() };
     });
@@ -179,12 +180,12 @@ describe('emoji browser helpers', () => {
     store.load();
     await vi.waitFor(() => expect(relay.subscribe).toHaveBeenCalled());
 
-    onEvent!(event({
+    onEvent!({ event: event({
       kind: KIND_EMOJI_SET,
       pubkey: FOLLOW,
       created_at: 300,
       tags: [['d', 'dogs'], ['emoji', 'doge', 'https://emoji.example/doge.png']],
-    }));
+    }) });
     onEose!();
 
     const item = store.state.items.find((candidate) => candidate.shortcode === 'doge')!;
@@ -204,9 +205,9 @@ describe('emoji browser helpers', () => {
   it('batches incoming emoji event rebuilds instead of rebuilding on every relay event', async () => {
     vi.useFakeTimers();
     try {
-      let onEvent: ((event: NostrEvent) => void) | null = null;
+      let onEvent: ((result: RelayEventResult) => void) | null = null;
       vi.mocked(relay.subscribe).mockImplementation((_filter, eventCallback) => {
-        onEvent = eventCallback as (event: NostrEvent) => void;
+        onEvent = eventCallback as (result: RelayEventResult) => void;
         return { close: vi.fn() };
       });
 
@@ -216,24 +217,24 @@ describe('emoji browser helpers', () => {
       await vi.waitFor(() => expect(relay.subscribe).toHaveBeenCalled());
       onUpdate.mockClear();
 
-      onEvent!(event({
+      onEvent!({ event: event({
         id: 'set-1',
         pubkey: FOLLOW,
         created_at: 301,
         tags: [['d', 'set-1'], ['emoji', 'one', 'https://emoji.example/one.png']],
-      }));
-      onEvent!(event({
+      }) });
+      onEvent!({ event: event({
         id: 'set-2',
         pubkey: FOLLOW,
         created_at: 302,
         tags: [['d', 'set-2'], ['emoji', 'two', 'https://emoji.example/two.png']],
-      }));
-      onEvent!(event({
+      }) });
+      onEvent!({ event: event({
         id: 'set-3',
         pubkey: FOLLOW,
         created_at: 303,
         tags: [['d', 'set-3'], ['emoji', 'three', 'https://emoji.example/three.png']],
-      }));
+      }) });
 
       expect(store.state.items).toEqual([]);
       expect(onUpdate).not.toHaveBeenCalled();
@@ -258,15 +259,15 @@ describe('#173 merge-safety on "Add to preferred emojis"', () => {
   });
 
   function wireSubscription(): { fireEvent(e: NostrEvent): void; fireEose(): void } {
-    let onEvent: ((e: NostrEvent) => void) | null = null;
+    let onEvent: ((result: RelayEventResult) => void) | null = null;
     let onEose: (() => void) | null = null;
     vi.mocked(relay.subscribe).mockImplementation((_filter, eventCallback, eoseCallback) => {
-      onEvent = eventCallback as (e: NostrEvent) => void;
+      onEvent = eventCallback as (result: RelayEventResult) => void;
       onEose = eoseCallback as () => void;
       return { close: vi.fn() };
     });
     return {
-      fireEvent: (e) => onEvent!(e),
+      fireEvent: (e) => onEvent!({ event: e }),
       fireEose: () => onEose!(),
     };
   }
