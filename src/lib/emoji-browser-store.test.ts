@@ -13,7 +13,7 @@ import {
   serializeEmojiBrowserPrefs,
   type EmojiBrowserItem,
 } from './emoji-browser-store.js';
-import { identity, relay } from '@napplet/sdk';
+import { identity, outbox, relay } from '@napplet/sdk';
 
 vi.mock('@napplet/sdk', () => ({
   identity: {
@@ -22,6 +22,7 @@ vi.mock('@napplet/sdk', () => ({
   },
   outbox: {
     subscribe: vi.fn(),
+    query: vi.fn(),
   },
   relay: {
     query: vi.fn(),
@@ -67,6 +68,8 @@ describe('emoji browser helpers', () => {
     vi.clearAllMocks();
     vi.mocked(identity.getPublicKey).mockResolvedValue(PUBKEY);
     vi.mocked(identity.getFollows).mockResolvedValue([FOLLOW]);
+    vi.mocked(outbox.query).mockResolvedValue({ events: [] });
+    vi.mocked(outbox.subscribe).mockReturnValue({ on: vi.fn(), close: vi.fn() });
     vi.mocked(relay.query).mockResolvedValue([]);
     vi.mocked(relay.subscribe).mockReturnValue({ close: vi.fn() });
     vi.mocked(relay.publish).mockResolvedValue(event({ kind: KIND_USER_EMOJI_LIST, pubkey: PUBKEY }));

@@ -231,10 +231,23 @@ function handleEose(ctx: EmojiBrowserContext): void {
 function subscribe(ctx: EmojiBrowserContext, filter: NostrFilter, useOutbox: boolean): void {
   ctx.pendingEose += 1;
   if (useOutbox) {
-    const sub = outbox.subscribe(filter, { strategy: 'outbox', live: false });
+    let closed = false;
+    const sub = outbox.subscribe(filter);
     sub.on('event', (result) => rememberEvent(ctx, result.event as NostrEvent));
-    sub.on('closed', () => handleEose(ctx));
-    ctx.subs.push({ close: () => sub.close() });
+    void outbox.query(filter)
+      .then((result) => {
+        if (closed) return;
+        for (const item of result.events) rememberEvent(ctx, item.event as NostrEvent);
+      })
+      .finally(() => {
+        if (!closed) handleEose(ctx);
+      });
+    ctx.subs.push({
+      close: () => {
+        closed = true;
+        sub.close();
+      },
+    });
     return;
   }
   ctx.subs.push(relay.subscribe(filter, (result) => rememberEvent(ctx, result.event as NostrEvent), () => handleEose(ctx)));
