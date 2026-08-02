@@ -3,12 +3,14 @@ import type { NostrEvent } from '@hyprgate/types';
 import { KIND_EMOJI_SET, KIND_USER_EMOJI_LIST } from '@hyprgate/utils/emoji-sets';
 import {
   buildCollectionTags,
+  createEmojiAuthorProfileIntentRequest,
   createEmojiBrowserStore,
   discoveryAuthors,
   groupEmojiItems,
   itemsFromEvent,
   latestUserEmojiListEvent,
   normalizeFollowPubkeys,
+  isHandledEmojiAuthorProfileIntentResult,
   parseEmojiBrowserPrefs,
   serializeEmojiBrowserPrefs,
   type EmojiBrowserItem,
@@ -249,6 +251,36 @@ describe('emoji browser helpers', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('emoji author profile navigation', () => {
+  it('builds the same canonical profile request for metadata and fallback identities', () => {
+    const metadataPresent = createEmojiAuthorProfileIntentRequest(PUBKEY);
+    const metadataAbsent = createEmojiAuthorProfileIntentRequest(PUBKEY);
+
+    expect(metadataPresent).toEqual({
+      archetype: 'profile',
+      payload: { pubkey: PUBKEY },
+    });
+    expect(metadataAbsent).toEqual(metadataPresent);
+  });
+
+  it('accepts only a handled result with the original request identity', () => {
+    const request = createEmojiAuthorProfileIntentRequest(PUBKEY)!;
+
+    expect(isHandledEmojiAuthorProfileIntentResult(request, {
+      ok: true,
+      archetype: 'profile',
+      action: 'open',
+      handled: true,
+    })).toBe(true);
+    expect(isHandledEmojiAuthorProfileIntentResult(request, {
+      ok: false,
+      archetype: 'profile',
+      action: 'open',
+      handled: false,
+    })).toBe(false);
   });
 });
 

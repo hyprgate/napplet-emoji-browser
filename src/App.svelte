@@ -4,11 +4,13 @@
     loadResourceObjectUrls,
     resourceImage,
   } from '@hyprgate/utils';
-  import { inc as ipc, storage } from '@napplet/sdk';
+  import { intent, storage } from '@napplet/sdk';
   import {
     createEmojiBrowserStore,
+    createEmojiAuthorProfileIntentRequest,
     DEFAULT_EMOJI_BROWSER_PREFS,
     groupEmojiItems,
+    isHandledEmojiAuthorProfileIntentResult,
     parseEmojiBrowserPrefs,
     serializeEmojiBrowserPrefs,
     type EmojiBrowserItem,
@@ -151,9 +153,14 @@
     persistViewPrefs({ ...prefs, inlineMine: !prefs.inlineMine });
   }
 
-  function openAuthorProfile(pubkey: string): void {
-    if (!pubkey) return;
-    ipc.emit('profile:open', [], JSON.stringify({ pubkey }));
+  async function openAuthorProfile(pubkey: string): Promise<void> {
+    const request = createEmojiAuthorProfileIntentRequest(pubkey);
+    if (!request) return;
+    try {
+      if (!isHandledEmojiAuthorProfileIntentResult(request, await intent.invoke(request))) return;
+    } catch {
+      // Keep the existing no-op behavior when profile navigation is unavailable.
+    }
   }
 
   function shortPubkey(pubkey: string): string {

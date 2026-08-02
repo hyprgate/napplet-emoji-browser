@@ -1,11 +1,35 @@
-import type { NostrEvent, NostrFilter } from '@hyprgate/types';
+import {
+  parseIntentResult,
+  type IntentRequest,
+  type NostrEvent,
+  type NostrFilter,
+} from '@hyprgate/types';
 import { KIND_EMOJI_SET, KIND_USER_EMOJI_LIST } from '@hyprgate/utils/emoji-sets';
-import { parseCustomEmojiTags, type CustomEmojiResource } from '@hyprgate/utils';
+import {
+  createProfileIntentRequest,
+  parseCustomEmojiTags,
+  type CustomEmojiResource,
+} from '@hyprgate/utils';
 import { identity, outbox, relay, type Subscription } from '@napplet/sdk';
 
 interface NappletShellHandle {
   ready(): Promise<unknown>;
   supports(domain: string, protocol?: string): boolean;
+}
+
+/** Build the profile request from the canonical pubkey, not best-effort metadata. */
+export function createEmojiAuthorProfileIntentRequest(pubkey: string): IntentRequest | null {
+  return createProfileIntentRequest({ pubkey });
+}
+
+/** A navigation result is useful only when it preserves this request and was handled. */
+export function isHandledEmojiAuthorProfileIntentResult(request: IntentRequest, value: unknown): boolean {
+  const result = parseIntentResult(value);
+  return result !== null
+    && result.ok
+    && result.handled
+    && result.archetype === request.archetype
+    && result.action === (request.action ?? 'open');
 }
 
 function getShell(): NappletShellHandle | null {
