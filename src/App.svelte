@@ -390,11 +390,12 @@
                     title={group.authorPubkey}
                     onclick={() => openAuthorProfile(group.authorPubkey)}
                   >
-                    {#if author.picture}
-                      <img class="author-avatar" use:resourceImage={author.picture} alt="" loading="lazy" />
-                    {:else}
+                    <span class="author-avatar-shell">
                       <span class="author-avatar placeholder" aria-hidden="true"></span>
-                    {/if}
+                      {#if author.picture}
+                        <img class="author-avatar" use:resourceImage={author.picture} alt="" loading="lazy" />
+                      {/if}
+                    </span>
                     <span class="author-name">{author.label}</span>
                   </button>
                 {:else}
@@ -606,7 +607,15 @@
     color: var(--hg-accent-cyan, #82d8f7);
   }
 
+  .author-avatar-shell {
+    display: grid;
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
+
   .author-avatar {
+    grid-area: 1 / 1;
     width: 20px;
     height: 20px;
     border-radius: 50%;
