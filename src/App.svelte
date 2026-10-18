@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import {
+    invokeNappletIntent,
     loadResourceObjectUrls,
     resourceImage,
   } from '@hyprgate/utils';
@@ -10,7 +11,7 @@
     createEmojiAuthorProfileIntentRequest,
     DEFAULT_EMOJI_BROWSER_PREFS,
     groupEmojiItems,
-    isHandledEmojiAuthorProfileIntentResult,
+    isAcceptedEmojiAuthorProfileIntentResult,
     parseEmojiBrowserPrefs,
     serializeEmojiBrowserPrefs,
     type EmojiBrowserItem,
@@ -157,7 +158,7 @@
     const request = createEmojiAuthorProfileIntentRequest(pubkey);
     if (!request) return;
     try {
-      if (!isHandledEmojiAuthorProfileIntentResult(request, await intent.invoke(request))) return;
+      if (!isAcceptedEmojiAuthorProfileIntentResult(request, await invokeNappletIntent(request))) return;
     } catch {
       // Keep the existing no-op behavior when profile navigation is unavailable.
     }

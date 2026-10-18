@@ -10,7 +10,7 @@ import {
   itemsFromEvent,
   latestUserEmojiListEvent,
   normalizeFollowPubkeys,
-  isHandledEmojiAuthorProfileIntentResult,
+  isAcceptedEmojiAuthorProfileIntentResult,
   parseEmojiBrowserPrefs,
   serializeEmojiBrowserPrefs,
   type EmojiBrowserItem,
@@ -261,25 +261,28 @@ describe('emoji author profile navigation', () => {
 
     expect(metadataPresent).toEqual({
       archetype: 'profile',
+      action: 'open',
+      convention: 'napplet:profile/open',
       payload: { pubkey: PUBKEY },
     });
     expect(metadataAbsent).toEqual(metadataPresent);
   });
 
-  it('accepts only a handled result with the original request identity', () => {
+  it('accepts only an accepted result with the original request identity', () => {
     const request = createEmojiAuthorProfileIntentRequest(PUBKEY)!;
 
-    expect(isHandledEmojiAuthorProfileIntentResult(request, {
+    expect(isAcceptedEmojiAuthorProfileIntentResult(request, {
       ok: true,
       archetype: 'profile',
       action: 'open',
-      handled: true,
+      convention: 'napplet:profile/open',
+      handler: `nip5d:35129:${PUBKEY}:profile`,
     })).toBe(true);
-    expect(isHandledEmojiAuthorProfileIntentResult(request, {
+    expect(isAcceptedEmojiAuthorProfileIntentResult(request, {
       ok: false,
       archetype: 'profile',
       action: 'open',
-      handled: false,
+      error: 'no handler',
     })).toBe(false);
   });
 });

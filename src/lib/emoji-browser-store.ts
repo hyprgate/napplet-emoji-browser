@@ -23,13 +23,13 @@ export function createEmojiAuthorProfileIntentRequest(pubkey: string): IntentReq
 }
 
 /** A navigation result is useful only when it preserves this request and was handled. */
-export function isHandledEmojiAuthorProfileIntentResult(request: IntentRequest, value: unknown): boolean {
+export function isAcceptedEmojiAuthorProfileIntentResult(request: IntentRequest, value: unknown): boolean {
   const result = parseIntentResult(value);
   return result !== null
     && result.ok
-    && result.handled
     && result.archetype === request.archetype
-    && result.action === (request.action ?? 'open');
+    && result.action === request.action
+    && result.convention === request.convention;
 }
 
 function getShell(): NappletShellHandle | null {
