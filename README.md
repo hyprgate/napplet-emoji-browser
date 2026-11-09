@@ -4,35 +4,23 @@
 > Do not push commits to this standalone napplet repository; direct changes are overwritten by Hyprgate's mirror workflow.
 <!-- HYPRGATE NAPPLET MIRROR NOTICE:END -->
 
-# napplet-emoji-browser
+# Emoji Browser
 
-Forkable source repository for the Hyprgate built-in Emoji Browser napplet, packaged as `@hyprgate/napp-emoji-browser`.
+Discover custom emoji from the people you follow, grouped by arrival, pack or person,
+and add the ones you like to your quick-react list.
 
-This repository is mounted into the Hyprgate parent checkout as `napplets/emoji-browser`.
-It expects the parent workspace for shared `@hyprgate/*` packages.
+The source lives in the Hyprgate monorepo at `napplets/emoji-browser`. The standalone
+`hyprgate/napplet-emoji-browser` repository is a generated, read-only mirror, so send
+changes to [hyprgate/web](https://github.com/hyprgate/web).
 
-## Parent checkout
+## Developing
+
+Run these from the root of a Hyprgate checkout so workspace dependencies resolve:
 
 ```bash
-git clone --recurse-submodules git@github.com:hyprgate/gui.git
-cd gui
 pnpm install --frozen-lockfile
-pnpm --filter @hyprgate/napp-emoji-browser build
-```
-
-## Paja runtime
-
-```bash
-pnpm --filter @hyprgate/napp-emoji-browser paja
-```
-
-This starts Kehto Paja and the napplet's Vite dev server together, using
-the port configured in `vite.config.ts`.
-
-## Testing
-
-```bash
-pnpm --filter @hyprgate/napp-emoji-browser test
-pnpm --filter @hyprgate/napp-emoji-browser type-check
-pnpm --filter @hyprgate/napp-emoji-browser build
+pnpm --filter ./napplets/emoji-browser paja        # Kehto Paja plus the Vite dev server
+pnpm --filter ./napplets/emoji-browser test
+pnpm --filter ./napplets/emoji-browser type-check
+pnpm --filter ./napplets/emoji-browser build
 ```

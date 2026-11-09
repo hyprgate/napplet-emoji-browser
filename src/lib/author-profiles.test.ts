@@ -24,7 +24,7 @@ describe('author identity resolution (NAP-COMMON)', () => {
     const fallback = fallbackAuthorIdentity(PUBKEY);
     expect(fallback.resolved).toBe(false);
     expect(fallback.picture).toBeNull();
-    expect(fallback.label).toBe(`${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}`);
+    expect(fallback.label).toMatch(/^npub1[a-z0-9]{7}…[a-z0-9]{6}$/);
   });
 
   it('prefers displayName, then name, then nip05', async () => {
@@ -69,7 +69,7 @@ describe('author identity resolution (NAP-COMMON)', () => {
     vi.mocked(common.getProfile).mockResolvedValue({ ok: true, pubkey: PUBKEY, profile: null });
     const empty = await resolveAuthorIdentity(PUBKEY);
     expect(empty.resolved).toBe(false);
-    expect(empty.label).toBe(`${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}`);
+    expect(empty.label).toMatch(/^npub1[a-z0-9]{7}…[a-z0-9]{6}$/);
   });
 
   it('dedupes concurrent lookups per pubkey and reports once', async () => {

@@ -574,6 +574,39 @@ export function groupEmojiItems(
   });
 }
 
+/**
+ * The same image with the same shortcode can arrive from a list and a pack. Show it once,
+ * preferring the copy with a pack, since that's the one with somewhere to point.
+ */
+export function uniqueEmojiItems(items: EmojiBrowserItem[]): EmojiBrowserItem[] {
+  const kept = new Map<string, EmojiBrowserItem>();
+  for (const item of items) {
+    const key = `${item.authorPubkey}\u0000${item.shortcode}\u0000${item.imageUrl}`;
+    const existing = kept.get(key);
+    if (!existing || (!existing.address && item.address)) kept.set(key, item);
+  }
+  const keptKeys = new Set([...kept.values()].map((item) => item.key));
+  return items.filter((item) => keptKeys.has(item.key));
+}
+
+/** Shortcodes shared by different images, which need a pack name to tell apart. */
+export function ambiguousShortcodes(items: EmojiBrowserItem[]): Set<string> {
+  const images = new Map<string, Set<string>>();
+  for (const item of items) {
+    images.set(item.shortcode, (images.get(item.shortcode) ?? new Set()).add(item.imageUrl));
+  }
+  return new Set([...images].filter(([, urls]) => urls.size > 1).map(([shortcode]) => shortcode));
+}
+
+/** One plain sentence for the header. */
+export function emojiSummary(items: EmojiBrowserItem[], followsCount: number, currentPubkey: string | null): string {
+  const mine = currentPubkey === null ? 0 : items.filter((item) => item.authorPubkey === currentPubkey).length;
+  const others = items.length - mine;
+  const people = followsCount === 1 ? '1 person you follow' : `${followsCount} people you follow`;
+  const fromOthers = `${others} emoji from ${people}`;
+  return mine > 0 ? `${fromOthers}, and ${mine} of yours` : fromOthers;
+}
+
 export function createEmojiBrowserStore(onUpdate?: () => void): EmojiBrowserStore {
   const ctx: EmojiBrowserContext = {
     state: createInitialEmojiBrowserState(),

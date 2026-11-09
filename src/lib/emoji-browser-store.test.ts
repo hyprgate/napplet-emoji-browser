@@ -14,6 +14,9 @@ import {
   parseEmojiBrowserPrefs,
   serializeEmojiBrowserPrefs,
   type EmojiBrowserItem,
+  ambiguousShortcodes,
+  emojiSummary,
+  uniqueEmojiItems,
 } from './emoji-browser-store.js';
 import { identity, outbox, relay } from '@napplet/sdk';
 
@@ -478,5 +481,48 @@ describe('#186 view prefs serialization', () => {
     expect(parseEmojiBrowserPrefs('{not json')).toEqual({ groupMode: 'arrival', inlineMine: true });
     expect(parseEmojiBrowserPrefs(JSON.stringify({ groupMode: 'bogus', inlineMine: 'yes' })))
       .toEqual({ groupMode: 'arrival', inlineMine: true });
+  });
+});
+
+describe('emoji browser display helpers', () => {
+  const item = (over: Partial<EmojiBrowserItem>): EmojiBrowserItem => ({
+    key: over.key ?? 'k',
+    shortcode: 'gear',
+    imageUrl: 'https://a.example/gear.png',
+    authorPubkey: 'a'.repeat(64),
+    eventId: 'e',
+    eventKind: 30030,
+    createdAt: 1,
+    sourceTitle: 'Pack',
+    tag: [],
+    added: false,
+    ...over,
+  });
+
+  it('shows one copy of an image that arrived from a list and a pack', () => {
+    const list = item({ key: 'list', eventKind: 10030 });
+    const pack = item({ key: 'pack', address: `30030:${'a'.repeat(64)}:x` });
+    expect(uniqueEmojiItems([list, pack]).map((entry) => entry.key)).toEqual(['pack']);
+  });
+
+  it('keeps the same shortcode from different people or with different images', () => {
+    const items = [
+      item({ key: 'one' }),
+      item({ key: 'two', authorPubkey: 'b'.repeat(64) }),
+      item({ key: 'three', imageUrl: 'https://a.example/other.png' }),
+    ];
+    expect(uniqueEmojiItems(items)).toHaveLength(3);
+  });
+
+  it('flags a shortcode only when its images differ', () => {
+    expect(ambiguousShortcodes([item({ key: 'one' }), item({ key: 'two' })]).size).toBe(0);
+    expect([...ambiguousShortcodes([item({ key: 'one' }), item({ key: 'two', imageUrl: 'https://a.example/b.png' })])]).toEqual(['gear']);
+  });
+
+  it('counts your own emoji apart from your follows', () => {
+    const mine = 'a'.repeat(64);
+    const items = [item({ key: 'one' }), item({ key: 'two', authorPubkey: 'b'.repeat(64) })];
+    expect(emojiSummary(items, 7, mine)).toBe('1 emoji from 7 people you follow, and 1 of yours');
+    expect(emojiSummary(items, 1, null)).toBe('2 emoji from 1 person you follow');
   });
 });

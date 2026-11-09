@@ -8,17 +8,21 @@
   import { intent, storage } from '@napplet/sdk';
   import {
     createEmojiBrowserStore,
+    ambiguousShortcodes,
     createEmojiAuthorProfileIntentRequest,
     DEFAULT_EMOJI_BROWSER_PREFS,
+    emojiSummary,
     groupEmojiItems,
     isAcceptedEmojiAuthorProfileIntentResult,
     parseEmojiBrowserPrefs,
     serializeEmojiBrowserPrefs,
+    uniqueEmojiItems,
     type EmojiBrowserItem,
     type EmojiBrowserPrefs,
     type EmojiGroupMode,
   } from './lib/emoji-browser-store.js';
   import {
+    authorNpub,
     createAuthorProfileResolver,
     fallbackAuthorIdentity,
     type AuthorIdentity,
@@ -90,37 +94,40 @@
     return authorIdentities[pubkey] ?? fallbackAuthorIdentity(pubkey);
   }
 
+  const uniqueItems = $derived(uniqueEmojiItems(state.items));
   const filteredItems = $derived.by(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return state.items;
-    return state.items.filter((item) =>
+    if (!needle) return uniqueItems;
+    return uniqueItems.filter((item) =>
       item.shortcode.toLowerCase().includes(needle)
       || item.sourceTitle.toLowerCase().includes(needle)
-      || item.authorPubkey.toLowerCase().includes(needle),
+      || authorIdentity(item.authorPubkey).label.toLowerCase().includes(needle),
     );
   });
   const visibleItems = $derived(resolvedEmojiItems(filteredItems, resolutionByKey));
   const resolverItems = $derived(
     selectActiveEmojiResolutionItems(filteredItems, state.items, resolutionByKey, undefined, resolvedSourceHints),
   );
-  const unresolvedCount = $derived(countUnresolvedEmojiItems(state.items, resolutionByKey));
+  const unresolvedCount = $derived(countUnresolvedEmojiItems(uniqueItems, resolutionByKey));
   const filteredUnresolvedCount = $derived(countUnresolvedEmojiItems(filteredItems, resolutionByKey));
-  const timedOutCount = $derived(countTimedOutEmojiItems(state.items, resolutionByKey));
-
-  const selected = $derived(
-    visibleItems.find((item) => item.key === selectedKey) ?? visibleItems[0] ?? null,
-  );
+  const timedOutCount = $derived(countTimedOutEmojiItems(uniqueItems, resolutionByKey));
+  const summary = $derived(emojiSummary(uniqueItems, state.followsCount, state.currentPubkey));
 
   const groups = $derived(
     groupEmojiItems(visibleItems, prefs.groupMode, state.currentPubkey, prefs.inlineMine),
   );
+  const ambiguous = $derived(ambiguousShortcodes(visibleItems));
 
-  // Resolve pubkey-group author identities lazily through NAP-COMMON.
+  // From the groups, not all items: your own can be hidden, and a hidden emoji can't be selected.
+  const selected = $derived.by(() => {
+    const shown = groups.flatMap((group) => group.items);
+    return shown.find((item) => item.key === selectedKey) ?? shown[0] ?? null;
+  });
+  const selectedAuthor = $derived(selected ? authorIdentity(selected.authorPubkey) : null);
+
+  // Search and the detail pane both use names, so resolve them up front through NAP-COMMON.
   $effect(() => {
-    if (prefs.groupMode !== 'pubkey') return;
-    for (const group of groups) {
-      if (group.authorPubkey) profileResolver.request(group.authorPubkey);
-    }
+    for (const item of uniqueItems) profileResolver.request(item.authorPubkey);
   });
 
   onMount(() => {
@@ -164,11 +171,11 @@
     }
   }
 
-  function shortPubkey(pubkey: string): string {
-    return pubkey.length > 12 ? `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}` : pubkey;
-  }
+  // The store's error and status describe the last add, so only show them with that emoji.
+  let lastAddKey = $state<string | null>(null);
 
   async function add(item: EmojiBrowserItem): Promise<void> {
+    lastAddKey = item.key;
     try {
       await store.addToCollection(item);
     } catch {
@@ -298,54 +305,43 @@
 
 <main>
   <header class="topbar">
-    <div>
-      <p>
-        {state.items.length} loaded emoji from {state.followsCount} follows
-        {#if unresolvedCount > 0}
-          <span class="inline-muted">· {unresolvedCount} unresolved</span>
-        {/if}
-        {#if timedOutCount > 0}
-          <span class="inline-muted">· {timedOutCount} timed out</span>
-        {/if}
-      </p>
-    </div>
+    <p>
+      {#if state.items.length > 0 || !state.loading}{summary}{:else}Looking for custom emoji...{/if}
+      {#if unresolvedCount - timedOutCount > 0}
+        <span class="inline-muted">· {unresolvedCount - timedOutCount} still loading</span>
+      {/if}
+      {#if timedOutCount > 0}
+        <span class="inline-muted">· {timedOutCount} didn't load</span>
+        <button type="button" class="link retry" onclick={retryTimedOut}>Try again</button>
+      {/if}
+    </p>
     <button type="button" class="ghost" disabled={state.loading} onclick={() => store.load()}>
       {state.loading ? 'Loading' : 'Refresh'}
     </button>
   </header>
 
   <section class="toolbar">
-    <input bind:value={query} placeholder="Filter shortcode, set, or pubkey" aria-label="Filter emoji" />
-    <div class="group-modes" role="group" aria-label="Group emoji by">
-      {#each (['arrival', 'pack', 'pubkey'] as const) as mode (mode)}
-        <button
-          type="button"
-          class="ghost mode"
-          class:active={prefs.groupMode === mode}
-          aria-pressed={prefs.groupMode === mode}
-          onclick={() => setGroupMode(mode)}
-        >
-          {GROUP_MODE_LABELS[mode]}
-        </button>
-      {/each}
+    <input bind:value={query} placeholder="Search by shortcode, pack or person" aria-label="Search emoji" />
+    <div class="group-control">
+      <span id="group-by-label" class="control-label">Group by</span>
+      <div class="group-modes" role="group" aria-labelledby="group-by-label">
+        {#each (['arrival', 'pack', 'pubkey'] as const) as mode (mode)}
+          <button
+            type="button"
+            class="mode"
+            class:active={prefs.groupMode === mode}
+            aria-pressed={prefs.groupMode === mode}
+            onclick={() => setGroupMode(mode)}
+          >
+            {GROUP_MODE_LABELS[mode]}
+          </button>
+        {/each}
+      </div>
     </div>
-    <button
-      type="button"
-      class="ghost mode"
-      class:active={prefs.inlineMine}
-      aria-pressed={prefs.inlineMine}
-      title="Show your own emoji inline (pinned to top)"
-      onclick={toggleInlineMine}
-    >
-      Inline mine
-    </button>
-    {#if timedOutCount > 0}
-      <button type="button" class="ghost retry" onclick={retryTimedOut}>
-        Try again ({timedOutCount})
-      </button>
-    {/if}
-    {#if state.status}<span class="status">{state.status}</span>{/if}
-    {#if state.error}<span class="status error">{state.error}</span>{/if}
+    <label class="show-mine" title="Show your own emoji, pinned to the top">
+      <input type="checkbox" checked={prefs.inlineMine} onchange={toggleInlineMine} />
+      Show mine
+    </label>
   </section>
 
   <div class="resolver-bin" aria-hidden="true">
@@ -369,13 +365,16 @@
       {#if groups.length === 0}
         <p class="empty">
           {#if state.loading}
-            Loading custom emoji...
+            Looking for custom emoji...
+          {:else if query.trim() && filteredItems.length === 0}
+            No emoji match “{query.trim()}”.
+            <button type="button" class="link" onclick={() => (query = '')}>Clear search</button>
           {:else if filteredItems.length === 0}
-            No custom emoji found.
-          {:else if !prefs.inlineMine && visibleItems.length === 0}
-            Your own emoji are hidden. Enable Inline mine to show them.
+            No custom emoji from the people you follow yet. When someone publishes a pack, it'll show up here.
+          {:else if !prefs.inlineMine && visibleItems.length > 0}
+            These are all your own emoji, which are hidden. Turn on Show mine to see them.
           {:else}
-            Resolving custom emoji images. {filteredUnresolvedCount} unresolved.
+            Loading {filteredUnresolvedCount} emoji images...
           {/if}
         </p>
       {:else}
@@ -388,7 +387,7 @@
                   <button
                     type="button"
                     class="author"
-                    title={group.authorPubkey}
+                    title={authorNpub(group.authorPubkey)}
                     onclick={() => openAuthorProfile(group.authorPubkey)}
                   >
                     <span class="author-avatar-shell">
@@ -412,11 +411,13 @@
                   class="emoji-card"
                   class:selected={selected?.key === item.key}
                   class:added={item.added}
+                  aria-pressed={selected?.key === item.key}
                   onclick={() => (selectedKey = item.key)}
                   title={`:${item.shortcode}:`}
                 >
                   <img use:resourceImage={item.imageUrl} alt={`:${item.shortcode}:`} loading="lazy" />
                   <span>:{item.shortcode}:</span>
+                  {#if ambiguous.has(item.shortcode)}<small title={item.sourceTitle}>{item.sourceTitle}</small>{/if}
                 </button>
               {/each}
             </div>
@@ -432,13 +433,24 @@
         </div>
         <div class="meta">
           <h2>:{selected.shortcode}:</h2>
-          <dl>
-            <div><dt>Source</dt><dd>{selected.sourceTitle}</dd></div>
-            <div><dt>Author</dt><dd title={selected.authorPubkey}>{shortPubkey(selected.authorPubkey)}</dd></div>
-            {#if selected.address}
-              <div><dt>Set</dt><dd title={selected.address}>{selected.address}</dd></div>
-            {/if}
-          </dl>
+          <p class="source">From {selected.address ? 'the pack' : 'the list'} <strong>{selected.sourceTitle}</strong></p>
+          {#if selectedAuthor}
+            <button
+              type="button"
+              class="author"
+              title={authorNpub(selected.authorPubkey)}
+              onclick={() => openAuthorProfile(selected.authorPubkey)}
+            >
+              <span class="author-avatar-shell">
+                <span class="author-avatar placeholder" aria-hidden="true"></span>
+                {#if selectedAuthor.picture}
+                  <img class="author-avatar" use:resourceImage={selectedAuthor.picture} alt="" loading="lazy" />
+                {/if}
+              </span>
+              <span class="author-name">{selectedAuthor.label}</span>
+              {#if selected.authorPubkey === state.currentPubkey}<span class="mine-badge">You</span>{/if}
+            </button>
+          {/if}
         </div>
         <button
           type="button"
@@ -446,11 +458,15 @@
           disabled={selected.added || state.publishingKey === selected.key}
           onclick={() => void add(selected)}
         >
-          {#if selected.added}Added
-          {:else if state.publishingKey === selected.key}Adding
-          {:else}Add to preferred emojis{/if}
+          {#if selected.added}In your quick-react list ✓
+          {:else if state.publishingKey === selected.key}Adding...
+          {:else}Add to my quick-react list{/if}
         </button>
-        <p class="pack-note">Use Emoji Sets to add this emoji to a named pack.</p>
+        <div class="detail-note" aria-live="polite">
+          {#if state.error && (lastAddKey === selected.key || lastAddKey === null)}<p class="error">{lastAddKey ? `Couldn't add it: ${state.error}` : state.error}</p>
+          {:else if state.status && lastAddKey === selected.key}<p class="ok">{state.status}</p>
+          {:else}<p class="pack-note">To put it in a named set, use Emoji Sets.</p>{/if}
+        </div>
       {:else}
         <p class="empty">Select an emoji.</p>
       {/if}
@@ -479,8 +495,55 @@
   .topbar,
   .toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
+  }
+
+  .toolbar > input {
+    flex: 1 1 220px;
+  }
+
+  .group-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .control-label {
+    color: var(--hg-text-muted, #b8b1a4);
+    font-size: 11px;
+  }
+
+  .show-mine {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .show-mine input {
+    flex: none;
+    height: auto;
+    margin: 0;
+    accent-color: var(--hg-accent-cyan, #82d8f7);
+  }
+
+  .link {
+    border: 0;
+    background: none;
+    color: var(--hg-accent-cyan, #82d8f7);
+    cursor: pointer;
+    font: inherit;
+    padding: 0 2px;
+    text-decoration: underline;
+  }
+
+  button:focus-visible, .show-mine input:focus-visible {
+    outline: 2px solid var(--hg-accent-cyan, #82d8f7);
+    outline-offset: 1px;
   }
 
   .topbar {
@@ -565,7 +628,7 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-    grid-auto-rows: 92px;
+    grid-auto-rows: 108px;
     gap: 8px;
     min-height: 0;
   }
@@ -646,16 +709,29 @@
 
   .group-modes {
     display: inline-flex;
-    gap: 4px;
+    border: 1px solid var(--hg-border, #303030);
+    border-radius: 6px;
+    overflow: hidden;
   }
 
   .mode {
+    min-height: 28px;
+    padding: 0 10px;
+    border: 0;
+    background: var(--hg-surface, #101010);
+    color: var(--hg-text-muted, #b8b1a4);
+    cursor: pointer;
+    font: inherit;
     white-space: nowrap;
   }
 
+  .mode + .mode {
+    border-left: 1px solid var(--hg-border, #303030);
+  }
+
   .mode.active {
-    border-color: var(--hg-accent-cyan, #82d8f7);
-    color: var(--hg-accent-cyan, #82d8f7);
+    background: color-mix(in srgb, var(--hg-accent-cyan, #82d8f7) 22%, var(--hg-surface, #101010));
+    color: var(--hg-text-primary, #f2efe7);
   }
 
   .emoji-card,
@@ -671,9 +747,9 @@
 
   .emoji-card {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr) auto auto;
     place-items: center;
-    gap: 4px;
+    gap: 2px;
     min-width: 0;
     padding: 8px;
     cursor: pointer;
@@ -694,6 +770,15 @@
     object-fit: contain;
   }
 
+  .emoji-card small {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--hg-accent-cyan, #82d8f7);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
   .emoji-card span {
     max-width: 100%;
     overflow: hidden;
@@ -705,7 +790,7 @@
 
   .detail {
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    align-content: start;
     gap: 10px;
     min-width: 0;
     min-height: 0;
@@ -715,35 +800,38 @@
   .preview {
     display: grid;
     place-items: center;
-    aspect-ratio: 1;
+    height: 150px;
     border: 1px solid var(--hg-border-muted, #242424);
     border-radius: 6px;
     background: var(--hg-bg-base, #050505);
   }
 
   .preview img {
-    width: min(72%, 180px);
-    height: min(72%, 180px);
+    width: 110px;
+    height: 110px;
     object-fit: contain;
   }
 
-  dl {
+  .meta {
     display: grid;
+    justify-items: start;
     gap: 6px;
-    margin: 0;
-  }
-
-  dl div {
-    display: grid;
-    gap: 1px;
     min-width: 0;
   }
 
-  dd {
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .source strong {
+    color: var(--hg-text-primary, #f2efe7);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .meta .author {
+    max-width: 100%;
+    padding: 2px 0;
+  }
+
+  .ok {
+    color: var(--hg-accent-green, #9be564);
   }
 
   .ghost,
@@ -751,10 +839,6 @@
     min-height: 30px;
     padding: 0 10px;
     cursor: pointer;
-  }
-
-  .retry {
-    white-space: nowrap;
   }
 
   .add {
@@ -772,7 +856,6 @@
   }
 
   .pack-note {
-    margin: -4px 0 0;
     color: var(--hg-text-muted, #b8b1a4);
     font-size: 11px;
   }
@@ -785,19 +868,28 @@
 
   @media (max-width: 720px) {
     .layout {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr) auto;
     }
 
     .detail {
-      grid-template-columns: 84px minmax(0, 1fr) auto;
-      grid-template-rows: auto;
+      grid-template-columns: 64px minmax(0, 1fr);
       align-items: center;
+      gap: 8px 10px;
     }
 
     .preview {
-      width: 84px;
-      aspect-ratio: 1;
+      width: 64px;
+      height: 64px;
+    }
+
+    .preview img {
+      width: 48px;
+      height: 48px;
+    }
+
+    .add, .detail-note {
+      grid-column: 1 / -1;
     }
   }
 </style>

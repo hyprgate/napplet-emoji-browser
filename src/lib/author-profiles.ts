@@ -1,4 +1,5 @@
 import { common } from '@napplet/sdk';
+import { buildMentionReference } from '@hyprgate/utils';
 
 export interface AuthorIdentity {
   pubkey: string;
@@ -12,8 +13,18 @@ export interface AuthorIdentity {
 
 export type AuthorIdentityMap = Record<string, AuthorIdentity>;
 
+/** The canonical npub, or the input when it isn't a valid key. */
+export function authorNpub(pubkey: string): string {
+  try {
+    return buildMentionReference(pubkey).replace(/^nostr:/, '');
+  } catch {
+    return pubkey;
+  }
+}
+
 function shortFallbackLabel(pubkey: string): string {
-  return pubkey.length > 12 ? `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}` : pubkey;
+  const npub = authorNpub(pubkey);
+  return npub.length > 18 ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : npub;
 }
 
 /** A non-resolved placeholder so the UI can render before metadata arrives. */
